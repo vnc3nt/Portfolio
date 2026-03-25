@@ -1,7 +1,27 @@
 import { NextResponse } from 'next/server';
 import { Octokit } from 'octokit';
+import { createClient } from '@supabase/supabase-js';
 
 export async function GET(request: Request) {
+  // 0. Verify Auth
+  const authHeader = request.headers.get('authorization');
+  const supabaseToken = authHeader?.split(' ')[1];
+
+  if (!supabaseToken) {
+    return NextResponse.json({ error: 'Unauthorized: No token provided' }, { status: 401 });
+  }
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  const { data: { user }, error: authError } = await supabase.auth.getUser(supabaseToken);
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized: Invalid token' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const username = searchParams.get('username');
 
@@ -9,14 +29,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Username is required' }, { status: 400 });
   }
 
-  const token = process.env.GITHUB_ACCESS_TOKEN;
+  const ghToken = process.env.GITHUB_ACCESS_TOKEN;
   
-  if (!token) {
+  if (!ghToken) {
     return NextResponse.json({ error: 'Server configuration error: Missing GITHUB_ACCESS_TOKEN' }, { status: 500 });
   }
 
   const octokit = new Octokit({
-    auth: token,
+    auth: ghToken,
   });
 
   try {
