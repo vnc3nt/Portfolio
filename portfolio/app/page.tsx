@@ -1,35 +1,136 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { motion, useSpring, useMotionValue } from 'framer-motion';
+import { 
+  DndContext, 
+  KeyboardSensor, 
+  MouseSensor, 
+  TouchSensor, 
+  useSensor, 
+  useSensors, 
+  closestCenter,
+  DragOverlay,
+  DragEndEvent,
+  DragStartEvent,
+  KeyboardCode
+} from '@dnd-kit/core';
+import { 
+  SortableContext, 
+  rectSortingStrategy, 
+  arrayMove 
+} from '@dnd-kit/sortable';
+import { restrictToWindowEdges } from '@dnd-kit/modifiers';
+
 import ProjectCard, { Project } from "../components/ProjectCard";
+import AddProjectModal from "../components/AddProjectModal";
+import { SortableItem } from "../components/SortableItem";
 import { supabase } from "../utils/supabase";
 import { User } from '@supabase/supabase-js';
-import { Edit3, Save, X } from 'lucide-react';
+import { Edit3, Save, X, Plus } from 'lucide-react';
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Mouse position state for background effect
+  const mouseX = useMotionValue(0);
+  const mouseY = useMotionValue(0);
+
+  // Smooth springs for blob movement with different characteristics for organic feel
+  const springX = useSpring(mouseX, { stiffness: 50, damping: 20 });
+  const springY = useSpring(mouseY, { stiffness: 50, damping: 20 });
+  
+  const springX2 = useSpring(mouseX, { stiffness: 30, damping: 25 });
+  const springY2 = useSpring(mouseY, { stiffness: 30, damping: 25 });
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // Center the 72x72 (288px) blobs. 
+      // Add small offset to X2/Y2 in the spring target via the hook config? 
+      // No, let's just use the same target but different springs to create lag.
+      // We can offset the SECOND blob slightly so they aren't perfectly stacked at rest?
+      // Actually, let's just update the target values. 
+      mouseX.set(e.clientX - 144);
+      mouseY.set(e.clientY - 144);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [mouseX, mouseY]);
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 250,
+        tolerance: 5,
+      },
+    }),
+    // Enter Taste deaktivieren für Drag-Start, damit man in Inputs Enter drücken kann
+    useSensor(KeyboardSensor, {
+      keyboardCodes: {
+        start: [KeyboardCode.Space],
+        cancel: [KeyboardCode.Esc],
+        end: [KeyboardCode.Space, KeyboardCode.Enter],
+      }
+    })
+  );
+
   const [user, setUser] = useState<User | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [deletedProjectIds, setDeletedProjectIds] = useState<string[]>([]);
 
-  // Datenladen sicher im useEffect gekapselt
+  const loadProjects = async () => {
+    setLoading(true);
+    setDeletedProjectIds([]); // Reset deleted tracker on load/cancel
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .order('sort_order', { ascending: true });
+
+    if (error) console.error(error);
+    if (data) {
+      // Ensure platforms has the correct structure if coming from old DB data
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const safeData = data
+        .filter((p: any) => p.title !== 'About-Page-Data-Do-Not-Delete')
+        .map((p: any) => ({
+        ...p,
+        platforms: {
+          apple: p.platforms?.apple || '',
+          android: p.platforms?.android || '',
+          web: p.platforms?.web || '',
+          windows: p.platforms?.windows || '' 
+        }
+      }));
+      setProjects(safeData as Project[]);
+    }
+    setLoading(false);
+  };
+
   useEffect(() => {
+    // Initial check
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
+      if (!session?.user) setIsEditMode(false);
     });
 
-    const loadProjects = async () => {
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .order('sort_order', { ascending: true });
-
-      if (error) console.error(error);
-      if (data) setProjects(data as Project[]);
-      setLoading(false);
-    };
+    // Listen for changes (login/logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (!session?.user) setIsEditMode(false);
+    });
 
     loadProjects();
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleProjectUpdate = (updatedProject: Project) => {
@@ -38,11 +139,55 @@ export default function Home() {
     );
   };
 
+  const handleDeleteProject = (projectId: string) => {
+    // Only "soft delete" in local state
+    setDeletedProjectIds(prev => [...prev, projectId]);
+    setProjects(prev => prev.filter(p => p.id !== projectId));
+  };
+
+  const handleAddProject = async (newProject: Omit<Project, 'id'>) => {
+    // Insert immediately to get an ID
+    const { data, error } = await supabase
+      .from('projects')
+      .insert([{
+        ...newProject,
+        sort_order: projects.length // Add to end
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error(error);
+      alert("Fehler beim Erstellen: " + error.message);
+      return;
+    }
+
+    if (data) {
+      setProjects([...projects, data as Project]);
+    }
+  };
+
   const saveChangesToDatabase = async () => {
     setLoading(true);
     let hasError = false;
 
-    for (const project of projects) {
+    // 1. Process deletions
+    for (const id of deletedProjectIds) {
+      const { error } = await supabase.from('projects').delete().eq('id', id);
+      if (error) {
+        console.error("Lösch-Fehler für ID " + id, error);
+        hasError = true;
+      }
+    }
+
+    // 2. Save all updated/reordered projects
+    const updates = projects.map((project, index) => ({
+      ...project,
+      sort_order: index
+    }));
+
+    // We send updates one by one (Upsert could be better but Update is safer for existing)
+    for (const project of updates) {
       const { error } = await supabase
         .from('projects')
         .update({
@@ -50,12 +195,16 @@ export default function Home() {
           description: project.description,
           date: project.date,
           technologies: project.technologies,
-          platforms: project.platforms, // <-- Daran lag es u.a.!
+          platforms: project.platforms,
+          images: project.images,
+          githubUrl: project.githubUrl,
+          collaborators: project.collaborators,
+          sort_order: project.sort_order
         })
         .eq('id', project.id);
 
       if (error) {
-        console.error("Speicher-Fehler:", error);
+        console.error("Speicher-Fehler für ID " + project.id, error);
         hasError = true;
       }
     }
@@ -65,38 +214,72 @@ export default function Home() {
     if (hasError) {
       alert("Es gab einen Fehler beim Speichern! Überprüfe die Konsole.");
     } else {
+      setDeletedProjectIds([]); // Clear deletions on success
       setIsEditMode(false);
     }
   };
 
-  // Hilfsfunktion zum Neuladen nach dem Abbrechen
-  const reloadData = async () => {
-    setLoading(true);
-    const { data } = await supabase.from('projects').select('*').order('sort_order', { ascending: true });
-    if (data) setProjects(data as Project[]);
-    setLoading(false);
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
   };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (active.id !== over?.id) {
+      setProjects((items) => {
+        const oldIndex = items.findIndex((item) => item.id === active.id);
+        const newIndex = items.findIndex((item) => item.id === over?.id);
+        
+        return arrayMove(items, oldIndex, newIndex);
+      });
+    }
+
+    setActiveId(null);
+  };
+
+  const filteredProjects = isEditMode ? projects : projects.filter(p => !p.is_hidden);
 
   if (loading && projects.length === 0) return <div className="h-screen flex items-center justify-center">Lade Portfolio...</div>;
 
   return (
     <main className="relative min-h-[calc(100vh-80px)] overflow-hidden flex flex-col items-center p-6 lg:p-12">
-      {/* Hintergrund */}
-      <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-[#7700ff] rounded-full mix-blend-multiply filter blur-[100px] opacity-40 dark:opacity-20 animate-blob"></div>
-      <div className="absolute top-1/3 right-1/4 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-[100px] opacity-40 dark:opacity-20 animate-blob animation-delay-2000"></div>
+      {/* Dynamic Background */}
+      <motion.div 
+        style={{ x: springX, y: springY }}
+        className="fixed top-0 left-0 pointer-events-none z-0"
+      >
+        <div className="w-72 h-72 bg-[#7700ff] rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-[100px] opacity-40 dark:opacity-30 animate-blob" />
+      </motion.div>
+
+      <motion.div 
+        style={{ x: springX2, y: springY2 }}
+        className="fixed top-0 left-0 pointer-events-none z-0"
+      >
+        <div className="w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-[100px] opacity-40 dark:opacity-30 animate-blob animation-delay-2000" />
+      </motion.div>
       
       {/* Admin Floating Action Bar */}
       {user && (
-        <div className="fixed bottom-10 z-50 flex items-center gap-3 bg-white/30 dark:bg-black/50 backdrop-blur-xl border border-white/20 p-3 rounded-full shadow-2xl">
+        <div className="fixed bottom-10 z-50 flex items-center gap-3 bg-white/30 dark:bg-black/50 backdrop-blur-xl border border-white/20 p-2 pl-4 pr-2 rounded-full shadow-2xl">
           {!isEditMode ? (
-            <button 
-              onClick={() => setIsEditMode(true)}
-              className="flex items-center gap-2 bg-[#7700ff] text-white px-4 py-2 rounded-full font-medium hover:bg-[#5e00cc] transition-all"
-            >
-              <Edit3 size={18} /> Portfolio bearbeiten
-            </button>
+             <button 
+               onClick={() => setIsEditMode(true)}
+               className="flex items-center gap-2 bg-[#7700ff] text-white px-5 py-2.5 rounded-full font-medium hover:bg-[#5e00cc] transition-all shadow-lg shadow-[#7700ff]/20"
+             >
+               <Edit3 size={18} /> Bearbeiten
+             </button>
           ) : (
             <>
+               <button 
+                onClick={() => setIsAddModalOpen(true)}
+                className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded-full font-medium hover:bg-blue-600 transition-all mr-2"
+              >
+                <Plus size={18} /> Neu
+              </button>
+
+              <div className="h-8 w-px bg-white/20 mx-1" />
+
               <button 
                 onClick={saveChangesToDatabase}
                 className="flex items-center gap-2 bg-green-500 text-white px-4 py-2 rounded-full font-medium hover:bg-green-600 transition-all"
@@ -104,33 +287,81 @@ export default function Home() {
                 <Save size={18} /> Speichern
               </button>
               <button 
-                onClick={() => { setIsEditMode(false); reloadData(); }}
-                className="flex items-center gap-2 bg-red-500/20 text-red-500 dark:text-red-400 px-4 py-2 rounded-full font-medium hover:bg-red-500/30 transition-all"
+                onClick={() => { setIsEditMode(false); loadProjects(); }}
+                className="flex items-center justify-center w-10 h-10 bg-red-500/20 text-red-500 dark:text-red-400 rounded-full font-medium hover:bg-red-500/30 transition-all"
+                title="Abbrechen"
               >
-                <X size={18} /> Abbrechen
+                <X size={18} />
               </button>
             </>
           )}
         </div>
       )}
 
-      {/* Hero */}
+      <AddProjectModal 
+        isOpen={isAddModalOpen} 
+        onClose={() => setIsAddModalOpen(false)} 
+        onAdd={handleAddProject} 
+        githubUsername={user?.user_metadata?.user_name || "vnc3nt"}
+      />
+
+      {/* Hero Section */}
       <div className="relative z-10 w-full max-w-7xl mx-auto mb-16 text-center mt-10">
-        <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight mb-4">
-          Meine <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#7700ff] to-blue-500">Projekte</span>
-        </h1>
+        {isEditMode && (
+          <p className="text-sm text-[#7700ff] font-medium bg-[#7700ff]/10 inline-block px-3 py-1 rounded-full animate-pulse">
+            Edit Mode Active — Drag to Reorder
+          </p>
+        )}
       </div>
 
-      {/* Grid */}
-      <div className="relative z-10 w-full max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 pb-32">
-        {projects.filter(p => isEditMode || !p.is_hidden).map((project) => (
-          <ProjectCard 
-            key={project.id} 
-            project={project} 
-            isEditMode={isEditMode}
-            onUpdate={handleProjectUpdate}
-          />
-        ))}
+      {/* Projects Grid */}
+      <div className="relative z-10 w-full max-w-7xl mx-auto pb-32">
+        <DndContext 
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          modifiers={[restrictToWindowEdges]}
+        >
+          <SortableContext 
+            items={projects.map(p => p.id)}
+            strategy={rectSortingStrategy}
+            disabled={!isEditMode}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {filteredProjects.map((project) => (
+                isEditMode ? (
+                  <SortableItem key={project.id} id={project.id} disabled={!isEditMode}>
+                    <ProjectCard 
+                      project={project}
+                      isEditMode={isEditMode}
+                      onUpdate={handleProjectUpdate}
+                      onDelete={handleDeleteProject}
+                    />
+                  </SortableItem> 
+                ) : (
+                  <div key={project.id} className="h-full">
+                     <ProjectCard 
+                      project={project}
+                      isEditMode={false}
+                    />
+                  </div>
+                )
+              ))}
+            </div>
+          </SortableContext>
+          
+          <DragOverlay>
+            {activeId ? (
+              <div className="scale-105 shadow-2xl opacity-90 cursor-grabbing bg-transparent h-full"> 
+                 <ProjectCard 
+                    project={projects.find(p => p.id === activeId)!} 
+                    isEditMode={true} 
+                  />
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
     </main>
   );

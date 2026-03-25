@@ -6,9 +6,13 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { User } from '@supabase/supabase-js'; // <-- 1. Wir importieren den korrekten Supabase-User-Typ
 
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+
 export default function Navbar() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const pathname = usePathname();
   
   // 2. Wir nutzen den Typ 'User | null' anstelle von 'any'
   const [user, setUser] = useState<User | null>(null);
@@ -42,30 +46,26 @@ export default function Navbar() {
   };
 
   return (
-    <nav className="fixed top-0 z-50 w-full border-b border-white/10 bg-white/30 px-6 py-4 backdrop-blur-md dark:bg-black/30 transition-colors duration-300">
+    <nav className="fixed top-0 z-50 w-full border-b border-gray-200 bg-white/30 px-6 py-4 backdrop-blur-md dark:bg-black/30 dark:border-white/10 transition-colors duration-300">
       <div className="mx-auto flex max-w-7xl items-center justify-between">
         
-        {/* Logo / Name */}
-        <div className="text-xl font-bold tracking-tighter text-gray-900 dark:text-white flex items-center gap-2">
-          Portfolio<span className="text-[#7700ff]">.</span>
-          {/* 3. Wir packen das Icon in ein <span> für den Titel-Hover */}
-          {user && (
-            <span title="Admin Modus aktiv">
-              <ShieldCheck size={18} className="text-green-500" />
-            </span>
-          )}
+        {/* Navigation Links */}
+        <div className="flex gap-6 text-sm font-medium">
+          <Link 
+            href="/" 
+            className={`transition-colors hover:text-[#7700ff] ${pathname === '/' ? 'text-[#7700ff] font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+          >
+            Portfolio
+          </Link>
+          <Link 
+            href="/about" 
+            className={`transition-colors hover:text-[#7700ff] ${pathname === '/about' ? 'text-[#7700ff] font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+          >
+            About
+          </Link>
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Admin-Link (nur sichtbar, wenn eingeloggt) */}
-          {mounted && user && (
-            <a 
-              href="/admin" 
-              className="text-sm font-medium text-gray-600 hover:text-[#7700ff] dark:text-gray-300 dark:hover:text-[#7700ff] transition-colors"
-            >
-              Dashboard
-            </a>
-          )}
           {mounted && (
             user ? (
               <button

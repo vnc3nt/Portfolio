@@ -28,6 +28,7 @@ export default function AdminDashboard() {
     const { data, error } = await supabase
       .from('projects')
       .select('*')
+      .neq('title', 'About-Page-Data-Do-Not-Delete')
       .order('sort_order', { ascending: true });
 
     if (error) console.error(error);
