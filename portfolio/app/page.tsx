@@ -31,6 +31,7 @@ import { Edit3, Save, X, Plus } from 'lucide-react';
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [originalProjects, setOriginalProjects] = useState<Project[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
   // Mouse position state for background effect
@@ -93,15 +94,27 @@ export default function Home() {
     const { data, error } = await supabase
       .from('projects')
       .select('*')
-      .order('sort_order', { ascending: true });
+      .order('created_at', { ascending: false });
 
     if (error) console.error(error);
     if (data) {
-      // Ensure platforms has the correct structure if coming from old DB data
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const safeData = data
-        .filter((p: any) => p.title !== 'About-Page-Data-Do-Not-Delete')
-        .map((p: any) => ({
+      // Filter out about page
+      const filteredData = data.filter((p: any) => p.title !== 'About-Page-Data-Do-Not-Delete');
+      
+      // Group by title, keep only the newest (already sorted by created_at desc)
+      const uniqueProjectsMap = new Map();
+      filteredData.forEach(p => {
+         if (!uniqueProjectsMap.has(p.title)) {
+             uniqueProjectsMap.set(p.title, p);
+         }
+      });
+      
+      let uniqueProjects = Array.from(uniqueProjectsMap.values());
+      
+      // Re-sort by sort_order
+      uniqueProjects.sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+      const safeData = uniqueProjects.map((p: any) => ({
         ...p,
         platforms: {
           apple: p.platforms?.apple || '',
@@ -111,6 +124,7 @@ export default function Home() {
         }
       }));
       setProjects(safeData as Project[]);
+      setOriginalProjects(JSON.parse(JSON.stringify(safeData))); // Deep copy for change detection
     }
     setLoading(false);
   };
@@ -186,11 +200,36 @@ export default function Home() {
       sort_order: index
     }));
 
-    // We send updates one by one (Upsert could be better but Update is safer for existing)
+    // We send updates one by one.
+    // Instead of UPDATE, we do INSERT to create a new version history entry.
     for (const project of updates) {
-      const { error } = await supabase
-        .from('projects')
-        .update({
+      // Check if project actually changed compared to original
+      const original = originalProjects.find(op => op.id === project.id);
+      
+      let isChanged = true;
+      if (original) {
+        // Compare only the fields that we map to the database
+        // Need to stringify carefully to ignore order of keys in objects
+        const pStr = JSON.stringify({
+          title: project.title, description: project.description, date: project.date,
+          technologies: project.technologies, platforms: project.platforms, images: project.images,
+          githubUrl: project.githubUrl, collaborators: project.collaborators, sort_order: project.sort_order,
+          is_hidden: project.is_hidden, is_private: project.is_private
+        });
+        const oStr = JSON.stringify({
+          title: original.title, description: original.description, date: original.date,
+          technologies: original.technologies, platforms: original.platforms, images: original.images,
+          githubUrl: original.githubUrl, collaborators: original.collaborators, sort_order: original.sort_order,
+          is_hidden: original.is_hidden, is_private: original.is_private
+        });
+        isChanged = pStr !== oStr;
+      }
+
+      if (!isChanged) {
+        continue; // Skip saving if nothing changed
+      }
+
+      const payload = {
           title: project.title,
           description: project.description,
           date: project.date,
@@ -199,9 +238,14 @@ export default function Home() {
           images: project.images,
           githubUrl: project.githubUrl,
           collaborators: project.collaborators,
-          sort_order: project.sort_order
-        })
-        .eq('id', project.id);
+          sort_order: project.sort_order,
+          is_hidden: project.is_hidden,
+          is_private: project.is_private
+      };
+      
+      const { error } = await supabase
+        .from('projects')
+        .insert([payload]);
 
       if (error) {
         console.error("Speicher-Fehler für ID " + project.id, error);
@@ -216,6 +260,8 @@ export default function Home() {
     } else {
       setDeletedProjectIds([]); // Clear deletions on success
       setIsEditMode(false);
+      // Reload projects to update originalProjects and get the new IDs
+      loadProjects();
     }
   };
 

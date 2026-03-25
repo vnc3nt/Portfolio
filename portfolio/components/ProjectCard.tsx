@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
-import { Github, Monitor, Smartphone, X, ImagePlus, Loader2, Trash2, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
+import { Github, Monitor, Smartphone, X, ImagePlus, Loader2, Trash2, History, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import PlatformBadge from './PlatformBadge';
 import { GitHubContributor } from '../utils/github';
@@ -23,6 +23,7 @@ export interface Project {
   is_private?: boolean;
   sort_order: number;
   collaborators?: GitHubContributor[];
+  created_at?: string;
 }
 
 interface ProjectCardProps {
@@ -38,6 +39,54 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
   const [editedProject, setEditedProject] = useState<Project>(project);
   const [newTech, setNewTech] = useState('');
   const [uploading, setUploading] = useState(false);
+  
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<Project[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [previewProject, setPreviewProject] = useState<Project | null>(null);
+
+  const fetchHistory = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsHistoryModalOpen(true);
+    setHistoryLoading(true);
+    const { data } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('title', project.title)
+      .order('created_at', { ascending: false });
+    
+    if (data) {
+      setHistoryVersions(data as Project[]);
+    }
+    setHistoryLoading(false);
+  };
+
+  const handleRestoreVersion = async (oldVersion: Project) => {
+    if (!confirm('Diese alte Version als neue aktuelle Version wiederherstellen?')) return;
+    
+    const payload = {
+      title: oldVersion.title,
+      description: oldVersion.description,
+      date: oldVersion.date,
+      technologies: oldVersion.technologies,
+      platforms: oldVersion.platforms,
+      images: oldVersion.images,
+      githubUrl: oldVersion.githubUrl,
+      collaborators: oldVersion.collaborators,
+      sort_order: project.sort_order, // keep current sorting
+      is_hidden: oldVersion.is_hidden,
+      is_private: oldVersion.is_private
+    };
+
+    const { data, error } = await supabase.from('projects').insert([payload]).select().single();
+    if (!error && data && onUpdate) {
+      onUpdate(data as Project);
+      setIsHistoryModalOpen(false);
+      setPreviewProject(null);
+    } else if (error) {
+      alert("Fehler beim Wiederherstellen: " + error.message);
+    }
+  };
 
   useEffect(() => {
     // Sync local state if prop changes (e.g. after save)
@@ -129,16 +178,33 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
         hover:bg-white/20 dark:hover:bg-white/10
         ${isEditMode ? 'border-[#7700ff] ring-2 ring-[#7700ff]/50 cursor-grab active:cursor-grabbing' : 'border-white/20 dark:border-white/10 ring-1 ring-white/20 cursor-default'} h-full`}
     >
-      {/* Delete Button (Edit Mode Only) */}
-      {isEditMode && onDelete && (
-        <button 
-          onClick={() => confirm('Projekt wirklich löschen?') && onDelete(project.id)}
-          onMouseDown={stopPropagation}
-          onTouchStart={stopPropagation}
-          className="absolute top-2 right-2 z-20 bg-red-500/80 backdrop-blur-sm p-1.5 rounded-full text-white hover:bg-red-600 shadow-md"
-        >
-          <Trash2 size={16} />
-        </button>
+      {/* Edit Mode Buttons */}
+      {isEditMode && (
+        <div className="absolute top-2 right-2 z-20 flex gap-2">
+          {/* History Button */}
+          <button 
+            onClick={fetchHistory}
+            onMouseDown={stopPropagation}
+            onTouchStart={stopPropagation}
+            className="bg-blue-500/80 backdrop-blur-sm p-1.5 rounded-full text-white hover:bg-blue-600 shadow-md"
+            title="Versionsverlauf"
+          >
+            <History size={16} />
+          </button>
+
+          {/* Delete Button */}
+          {onDelete && (
+            <button 
+              onClick={() => confirm('Projekt wirklich löschen?') && onDelete(project.id)}
+              onMouseDown={stopPropagation}
+              onTouchStart={stopPropagation}
+              className="bg-red-500/80 backdrop-blur-sm p-1.5 rounded-full text-white hover:bg-red-600 shadow-md"
+              title="Projekt löschen"
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
+        </div>
       )}
 
       {/* --- Image Section --- */}
@@ -431,6 +497,83 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
           </div>
         )}
       </div>
+
+      {/* History Modal */}
+      {isHistoryModalOpen && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+          onMouseDown={stopPropagation}
+          onTouchStart={stopPropagation}
+        >
+          <div className="bg-white dark:bg-black/90 border border-white/20 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-white/10">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <History size={24} className="text-[#7700ff]" />
+                Versionsverlauf: {project.title}
+              </h2>
+              <button 
+                onClick={() => {
+                  setIsHistoryModalOpen(false);
+                  setPreviewProject(null);
+                }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {historyLoading ? (
+                <div className="flex justify-center p-8"><Loader2 className="animate-spin text-[#7700ff]" size={32} /></div>
+              ) : (
+                <div className="space-y-4">
+                  {historyVersions.map((v, i) => {
+                    const isLatest = i === 0;
+                    // Supabase auto-adds created_at typically, if it exists
+                    const dateStr = (v as any).created_at ? new Date((v as any).created_at).toLocaleString('de-DE') : 'Unbekanntes Datum';
+                    
+                    return (
+                      <div key={v.id} className={`p-4 rounded-xl border ${isLatest ? 'border-[#7700ff] bg-[#7700ff]/5' : 'border-gray-200 dark:border-white/10 bg-black/5'} flex justify-between items-center`}>
+                        <div>
+                          <p className="font-semibold">{dateStr} {isLatest && <span className="ml-2 text-xs bg-[#7700ff] text-white px-2 py-0.5 rounded-full">Aktuell</span>}</p>
+                          <p className="text-sm text-gray-500 line-clamp-1">{v.description}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => setPreviewProject(previewProject?.id === v.id ? null : v)}
+                            className="px-3 py-1.5 text-sm bg-gray-200 dark:bg-white/10 hover:bg-gray-300 dark:hover:bg-white/20 rounded-lg transition-colors"
+                          >
+                            {previewProject?.id === v.id ? 'Vorschau schließen' : 'Vorschau'}
+                          </button>
+                          {!isLatest && (
+                            <button 
+                              onClick={() => handleRestoreVersion(v)}
+                              className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
+                            >
+                              Wiederherstellen
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Preview Box */}
+              {previewProject && (
+                <div className="mt-8 border-t border-gray-200 dark:border-white/10 pt-8">
+                  <h3 className="text-lg font-bold mb-4">Vorschau (Read-Only)</h3>
+                  <div className="pointer-events-none opacity-80 scale-95 origin-top">
+                    {/* Render a read-only un-editable ProjectCard */}
+                    <ProjectCard project={previewProject} isEditMode={false} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

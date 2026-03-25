@@ -53,13 +53,13 @@ export default function Navbar() {
         <div className="flex gap-6 text-sm font-medium">
           <Link 
             href="/" 
-            className={`transition-colors hover:text-[#7700ff] ${pathname === '/' ? 'text-[#7700ff] font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+            className={`transition-colors hover:text-[#7700ff] ${pathname === '/' ? 'text-[#7700ff]' : 'text-gray-600 dark:text-gray-300'}`}
           >
             Portfolio
           </Link>
           <Link 
             href="/about" 
-            className={`transition-colors hover:text-[#7700ff] ${pathname === '/about' ? 'text-[#7700ff] font-bold' : 'text-gray-600 dark:text-gray-300'}`}
+            className={`transition-colors hover:text-[#7700ff] ${pathname === '/about' ? 'text-[#7700ff]' : 'text-gray-600 dark:text-gray-300'}`}
           >
             About
           </Link>
