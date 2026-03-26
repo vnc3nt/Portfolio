@@ -470,7 +470,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               icon={Globe} 
               label="Web" 
               url={editedProject.platforms.web} 
-              colorClass="bg-gray-700 dark:bg-white/20" 
+              colorClass="bg-gray-500 dark:bg-white/20" 
               isEditMode={isEditMode}
             />
             <PlatformBadge 
@@ -484,14 +484,14 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               icon={AndroidIcon} 
               label="Play Store" 
               url={editedProject.platforms.android} 
-              colorClass="bg-[#3DDC84] text-black" 
+              colorClass="bg-[#26C96C] text-black" 
               isEditMode={isEditMode}
             />
             <PlatformBadge 
               icon={WindowsIcon} 
               label="Windows Store" 
               url={editedProject.platforms.windows} 
-              colorClass="bg-[#0078D7]" 
+              colorClass="bg-[#0279D9]" 
               isEditMode={isEditMode}
             />
           </div>
