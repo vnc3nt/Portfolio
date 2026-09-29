@@ -118,13 +118,13 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
   }, [project.images]);
 
   useEffect(() => {
-    if (!isHovered && (project.images?.length || 0) > 1 && !isEditMode) {
+    if (!isHovered && !isImageLightboxOpen && (project.images?.length || 0) > 1 && !isEditMode) {
       const timer = setInterval(() => {
         nextImage();
       }, 5000);
       return () => clearInterval(timer);
     }
-  }, [isHovered, project.images, isEditMode, nextImage]);
+  }, [isHovered, isImageLightboxOpen, project.images, isEditMode, nextImage]);
 
   useEffect(() => {
     if (!isImageLightboxOpen) return;
@@ -143,8 +143,15 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     return () => window.removeEventListener('keydown', handleKeydown);
   }, [isImageLightboxOpen, nextImage, prevImage]);
 
+  useEffect(() => {
+    const closeOtherLightboxes = () => setIsImageLightboxOpen(false);
+    window.addEventListener('portfolio:close-image-lightboxes', closeOtherLightboxes);
+    return () => window.removeEventListener('portfolio:close-image-lightboxes', closeOtherLightboxes);
+  }, []);
+
   const openImageLightbox = (e: React.MouseEvent) => {
     e.stopPropagation();
+    window.dispatchEvent(new Event('portfolio:close-image-lightboxes'));
     setIsImageLightboxOpen(true);
   };
 
@@ -353,7 +360,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
         </div>
       ) : (
         <div 
-            className="group relative aspect-video w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-950 shadow-inner hover:shadow-md transition-shadow cursor-zoom-in"
+            className="group relative aspect-video w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-zinc-900 shadow-inner hover:shadow-md transition-shadow cursor-zoom-in"
           onClick={openImageLightbox}
           onMouseDown={stopPropagation}
           onTouchStart={stopPropagation}
@@ -374,7 +381,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 className={imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? 'hidden' : 'absolute inset-3 h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] object-contain rounded-lg shadow-lg ring-1 ring-black/10 dark:ring-white/10'}
               />
               {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' && (
-                <div className="absolute left-1/2 top-1/2 h-44 w-24 -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-xl shadow-black/40">
+                <div className="absolute left-1/2 top-1/2 h-44 w-24 -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]">
                   <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
                     <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
                     <img
@@ -802,7 +809,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
       {/* Image Lightbox */}
       {isImageLightboxOpen && (
         <div
-          className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-white/95 p-4 backdrop-blur-md dark:bg-black/90"
           onClick={() => setIsImageLightboxOpen(false)}
         >
           <button
@@ -810,28 +817,36 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               e.stopPropagation();
               setIsImageLightboxOpen(false);
             }}
-            className="absolute top-5 right-5 z-[120] bg-black/60 hover:bg-black/80 text-white rounded-full p-2 border border-white/20"
+            className="absolute right-5 top-5 z-[120] rounded-full border border-black/10 bg-white/70 p-2 text-slate-700 hover:bg-white dark:border-white/20 dark:bg-black/60 dark:text-white dark:hover:bg-black/80"
             title="Schließen"
           >
             <X size={22} />
           </button>
 
           <div
-            className="relative w-full h-full max-w-7xl max-h-[92vh] flex items-center justify-center"
+            className="relative flex h-[90vh] max-h-[calc(100vh-2rem)] w-full max-w-7xl items-center justify-center overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <img
-              src={editedProject.images?.[currentImageIndex] || fallbackImage}
-              alt={editedProject.title}
-              className="absolute inset-0 w-full h-full object-cover blur-3xl scale-110 opacity-35"
-              aria-hidden="true"
-            />
-
-            <img
-              src={editedProject.images?.[currentImageIndex] || fallbackImage}
-              alt={editedProject.title}
-              className="relative z-10 max-h-full max-w-full object-contain rounded-2xl shadow-2xl ring-1 ring-white/20"
-            />
+            {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? (
+              <div className="relative z-10 h-[63%] max-h-[63%] max-w-[calc(100vw-3rem)] w-auto aspect-[9/19.5] rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]">
+                <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
+                  <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
+                  <img
+                    src={editedProject.images?.[currentImageIndex] || fallbackImage}
+                    alt={editedProject.title}
+                    onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              </div>
+            ) : (
+              <img
+                src={editedProject.images?.[currentImageIndex] || fallbackImage}
+                alt={editedProject.title}
+                onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
+                className="relative z-10 max-h-[90%] max-w-full object-contain rounded-2xl shadow-2xl ring-1 ring-black/10 dark:ring-white/20"
+              />
+            )}
 
             <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-white/10" />
 
@@ -842,7 +857,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                     e.stopPropagation();
                     prevImage();
                   }}
-                  className="absolute left-3 md:left-5 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/70 text-white p-3 rounded-full border border-white/20"
+                  className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-black/10 bg-white/75 p-3 text-slate-700 hover:bg-white md:left-5 dark:border-white/20 dark:bg-black/50 dark:text-white dark:hover:bg-black/70"
                   title="Vorheriges Bild"
                 >
                   <ChevronLeft size={24} />
@@ -853,13 +868,13 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                     e.stopPropagation();
                     nextImage();
                   }}
-                  className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/70 text-white p-3 rounded-full border border-white/20"
+                  className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-black/10 bg-white/75 p-3 text-slate-700 hover:bg-white md:right-5 dark:border-white/20 dark:bg-black/50 dark:text-white dark:hover:bg-black/70"
                   title="Nächstes Bild"
                 >
                   <ChevronRight size={24} />
                 </button>
 
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full bg-black/45 border border-white/15 text-xs text-white">
+                <div className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-black/10 bg-white/75 px-3 py-1 text-xs text-slate-700 dark:border-white/15 dark:bg-black/45 dark:text-white">
                   {currentImageIndex + 1} / {editedProject.images.length}
                 </div>
               </>
