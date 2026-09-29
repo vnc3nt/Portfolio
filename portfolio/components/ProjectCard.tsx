@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
-import { Github, Monitor, Smartphone, X, ImagePlus, Loader2, Trash2, History, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
+import Cropper, { type Area } from 'react-easy-crop';
+import { Github, X, ImagePlus, Loader2, Trash2, History, ChevronLeft, ChevronRight, Globe, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import PlatformBadge from './PlatformBadge';
 import { GitHubContributor } from '../utils/github';
@@ -34,16 +35,25 @@ interface ProjectCardProps {
 }
 
 export default function ProjectCard({ project, isEditMode = false, onUpdate, onDelete }: ProjectCardProps) {
+  const fallbackImage = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22 viewBox=%220 0 400 300%22%3E%3Cdefs%3E%3ClinearGradient id=%22g%22 x1=%220%25%22 y1=%220%25%22 x2=%22100%25%22 y2=%22100%25%22%3E%3Cstop offset=%220%25%22 stop-color=%22%2318273a%22/%3E%3Cstop offset=%22100%25%22 stop-color=%22%23261448%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%22400%22 height=%22300%22 fill=%22url(%23g)%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23cbd5e1%22 font-family=%22system-ui%22 font-size=%2220%22%3EKein Bild%3C/text%3E%3C/svg%3E';
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [imageOrientations, setImageOrientations] = useState<Record<string, 'portrait' | 'landscape'>>({});
   const [isHovered, setIsHovered] = useState(false);
   const [editedProject, setEditedProject] = useState<Project>(project);
   const [newTech, setNewTech] = useState('');
-  const [uploading, setUploading] = useState(false);
+  const [cropSource, setCropSource] = useState<string | null>(null);
+  const [cropMode, setCropMode] = useState<'landscape' | 'portrait'>('landscape');
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+  const [isCropSaving, setIsCropSaving] = useState(false);
   
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyVersions, setHistoryVersions] = useState<Project[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [previewProject, setPreviewProject] = useState<Project | null>(null);
+  const [isTechExpanded, setIsTechExpanded] = useState(false);
+  const [isImageLightboxOpen, setIsImageLightboxOpen] = useState(false);
 
   const fetchHistory = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -93,15 +103,19 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     setEditedProject(project);
   }, [project]);
 
-  const nextImage = (e?: React.MouseEvent) => {
+  useEffect(() => {
+    setIsTechExpanded(false);
+  }, [project.id, isEditMode]);
+
+  const nextImage = useCallback((e?: React.MouseEvent) => {
     e?.stopPropagation();
     setCurrentImageIndex((prev) => (prev + 1) % (project.images?.length || 1));
-  };
+  }, [project.images]);
 
-  const prevImage = (e?: React.MouseEvent) => {
+  const prevImage = useCallback((e?: React.MouseEvent) => {
     e?.stopPropagation();
     setCurrentImageIndex((prev) => (prev - 1 + (project.images?.length || 1)) % (project.images?.length || 1));
-  };
+  }, [project.images]);
 
   useEffect(() => {
     if (!isHovered && (project.images?.length || 0) > 1 && !isEditMode) {
@@ -110,7 +124,37 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
       }, 5000);
       return () => clearInterval(timer);
     }
-  }, [isHovered, project.images, isEditMode]);
+  }, [isHovered, project.images, isEditMode, nextImage]);
+
+  useEffect(() => {
+    if (!isImageLightboxOpen) return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsImageLightboxOpen(false);
+      } else if (event.key === 'ArrowLeft') {
+        prevImage();
+      } else if (event.key === 'ArrowRight') {
+        nextImage();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [isImageLightboxOpen, nextImage, prevImage]);
+
+  const openImageLightbox = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsImageLightboxOpen(true);
+  };
+
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>, imageUrl: string) => {
+    const { naturalWidth, naturalHeight } = event.currentTarget;
+    const orientation = naturalHeight > naturalWidth ? 'portrait' : 'landscape';
+    setImageOrientations((previous) => (
+      previous[imageUrl] === orientation ? previous : { ...previous, [imageUrl]: orientation }
+    ));
+  };
 
   const handleChange = <K extends keyof Project>(field: K, value: Project[K]) => {
     const updated = { ...editedProject, [field]: value };
@@ -124,19 +168,68 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     handleChange('images', updatedImages);
   };
 
-  const uploadImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectImageForCrop = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const objectUrl = URL.createObjectURL(file);
+    setCropSource(objectUrl);
+    setCropMode('landscape');
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedAreaPixels(null);
+  };
+
+  const closeCropper = () => {
+    if (cropSource) URL.revokeObjectURL(cropSource);
+    setCropSource(null);
+    setCroppedAreaPixels(null);
+  };
+
+  const uploadCroppedImage = async () => {
+    if (!cropSource || !croppedAreaPixels) return;
+
     try {
-      setUploading(true);
-      if (!event.target.files || event.target.files.length === 0) return;
-      
-      const file = event.target.files[0];
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      setIsCropSaving(true);
+      const image = new Image();
+      image.src = cropSource;
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error('Das Bild konnte nicht gelesen werden.'));
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = croppedAreaPixels.width;
+      canvas.height = croppedAreaPixels.height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas ist nicht verfügbar.');
+
+      context.drawImage(
+        image,
+        croppedAreaPixels.x,
+        croppedAreaPixels.y,
+        croppedAreaPixels.width,
+        croppedAreaPixels.height,
+        0,
+        0,
+        croppedAreaPixels.width,
+        croppedAreaPixels.height
+      );
+
+      const croppedBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error('Das zugeschnittene Bild konnte nicht erstellt werden.'));
+        }, 'image/jpeg', 0.92);
+      });
+
+      const fileName = `${Math.random().toString(36).substring(2)}.jpg`;
       const filePath = `${project.id}/${fileName}`; 
 
       const { error: uploadError } = await supabase.storage
         .from('portfolio-images')
-        .upload(filePath, file);
+        .upload(filePath, croppedBlob, { contentType: 'image/jpeg' });
 
       if (uploadError) throw uploadError;
 
@@ -145,10 +238,11 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
         .getPublicUrl(filePath);
 
       handleChange('images', [...(editedProject.images || []), publicUrl]);
+      closeCropper();
     } catch (error) {
       alert('Fehler beim Bild-Upload: ' + error);
     } finally {
-      setUploading(false);
+      setIsCropSaving(false);
     }
   };
   /* ----------------- */
@@ -176,7 +270,8 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
       onMouseLeave={() => setIsHovered(false)}
       className={`relative flex flex-col overflow-hidden rounded-2xl border bg-white/10 dark:bg-white/5 p-4 shadow-lg backdrop-blur-md transition-all 
         hover:bg-white/20 dark:hover:bg-white/10
-        ${isEditMode ? 'border-[#7700ff] ring-2 ring-[#7700ff]/50 cursor-grab active:cursor-grabbing' : 'border-white/20 dark:border-white/10 ring-1 ring-white/20 cursor-default'} h-full`}
+        ${isEditMode ? 'border-[#7700ff] ring-2 ring-[#7700ff]/50 cursor-grab active:cursor-grabbing' : 'border-white/20 dark:border-white/10 ring-1 ring-white/20 cursor-default'}
+        ${isEditMode && editedProject.is_hidden ? 'opacity-45 grayscale' : ''} h-full`}
     >
       {/* Edit Mode Buttons */}
       {isEditMode && (
@@ -190,6 +285,19 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
             title="Versionsverlauf"
           >
             <History size={16} />
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleChange('is_hidden', !editedProject.is_hidden);
+            }}
+            onMouseDown={stopPropagation}
+            onTouchStart={stopPropagation}
+            className={`backdrop-blur-sm p-1.5 rounded-full text-white shadow-md transition-colors ${editedProject.is_hidden ? 'bg-amber-500/90 hover:bg-amber-600' : 'bg-slate-500/80 hover:bg-slate-600'}`}
+            title={editedProject.is_hidden ? 'Card einblenden' : 'Card ausblenden'}
+          >
+            {editedProject.is_hidden ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
 
           {/* Delete Button */}
@@ -238,28 +346,46 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
             ))}
             
             <label className="shrink-0 w-16 h-16 rounded-lg border-2 border-dashed border-[#7700ff]/50 flex items-center justify-center cursor-pointer hover:bg-[#7700ff]/10 hover:border-[#7700ff] transition-colors">
-              {uploading ? <Loader2 size={16} className="animate-spin text-[#7700ff]" /> : <ImagePlus size={16} className="text-[#7700ff]" />}
-              <input type="file" accept="image/*" className="hidden" onChange={uploadImage} disabled={uploading} />
+              {isCropSaving ? <Loader2 size={16} className="animate-spin text-[#7700ff]" /> : <ImagePlus size={16} className="text-[#7700ff]" />}
+                <input type="file" accept="image/*" className="hidden" onChange={selectImageForCrop} disabled={isCropSaving} />
             </label>
           </Reorder.Group>
         </div>
       ) : (
         <div 
-          className="group relative h-48 w-full overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-900/50 shadow-inner hover:shadow-md transition-shadow"
+            className="group relative aspect-video w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-950 shadow-inner hover:shadow-md transition-shadow cursor-zoom-in"
+          onClick={openImageLightbox}
           onMouseDown={stopPropagation}
           onTouchStart={stopPropagation}
         >
            <AnimatePresence mode="wait">
-            <motion.img
+            <motion.div
               key={currentImageIndex}
-              src={editedProject.images?.[currentImageIndex] || 'https://via.placeholder.com/400x300?text=No+Image'}
-              alt={editedProject.title}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.5, ease: "easeInOut" }}
-              className="absolute h-full w-full object-cover"
-            />
+              className="absolute inset-0"
+            >
+              <img
+                src={editedProject.images?.[currentImageIndex] || fallbackImage}
+                alt={editedProject.title}
+                onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
+                className={imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? 'hidden' : 'absolute inset-3 h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] object-contain rounded-lg shadow-lg ring-1 ring-black/10 dark:ring-white/10'}
+              />
+              {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' && (
+                <div className="absolute left-1/2 top-1/2 h-44 w-24 -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-xl shadow-black/40">
+                  <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
+                    <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
+                    <img
+                      src={editedProject.images?.[currentImageIndex] || fallbackImage}
+                      alt={editedProject.title}
+                      className="h-full w-full object-contain"
+                    />
+                  </div>
+                </div>
+              )}
+            </motion.div>
           </AnimatePresence>
           
           {/* Navigation Arrows (Only if multiple images) */}
@@ -394,13 +520,22 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
              </div>
            ) : (
              <div className="flex flex-wrap gap-2">
-               {editedProject.technologies.slice(0, 4).map(tech => (
+               {(isTechExpanded ? editedProject.technologies : editedProject.technologies.slice(0, 4)).map(tech => (
                  <span key={tech} className="text-[10px] font-medium px-2 py-1 rounded-full bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 text-gray-600 dark:text-gray-300">
                    {tech}
                  </span>
                ))}
                {editedProject.technologies.length > 4 && (
-                 <span className="text-[10px] px-2 py-1 text-gray-400">+{editedProject.technologies.length - 4}</span>
+                 <button
+                   type="button"
+                   onClick={(e) => {
+                     e.stopPropagation();
+                     setIsTechExpanded((prev) => !prev);
+                   }}
+                   className="text-[10px] px-2 py-1 text-gray-500 hover:text-[#7700ff] transition-colors"
+                 >
+                   {isTechExpanded ? 'Weniger anzeigen' : `+${editedProject.technologies.length - 4} weitere`}
+                 </button>
                )}
              </div>
            )}
@@ -571,6 +706,164 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Cropper */}
+      {cropSource && (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/15 bg-slate-950 text-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 p-4">
+              <div>
+                <h2 className="font-semibold">Bildformat wählen</h2>
+                <p className="mt-1 text-xs text-slate-400">Ziehe das Bild und passe den Zoom an.</p>
+              </div>
+              <button type="button" onClick={closeCropper} className="rounded-full p-2 text-slate-400 transition-colors hover:bg-white/10 hover:text-white" title="Schließen">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex gap-2 border-b border-white/10 p-4">
+              <button
+                type="button"
+                aria-pressed={cropMode === 'landscape'}
+                onClick={() => {
+                  setCropMode('landscape');
+                  setCrop({ x: 0, y: 0 });
+                  setZoom(1);
+                }}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'landscape' ? 'border-[#7700ff] bg-[#7700ff]/15 text-white' : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'}`}
+              >
+                <span className="block font-medium">Querformat</span>
+                <span className="text-xs opacity-70">16:9, füllt den Vorschauerahmen</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={cropMode === 'portrait'}
+                onClick={() => {
+                  setCropMode('portrait');
+                  setCrop({ x: 0, y: 0 });
+                  setZoom(1);
+                }}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'portrait' ? 'border-[#7700ff] bg-[#7700ff]/15 text-white' : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'}`}
+              >
+                <span className="block font-medium">Smartphone</span>
+                <span className="text-xs opacity-70">9:19.5, für den iPhone-Rahmen</span>
+              </button>
+            </div>
+
+            <div className="relative h-[min(62vh,520px)] w-full bg-black">
+              <Cropper
+                image={cropSource}
+                crop={crop}
+                zoom={zoom}
+                aspect={cropMode === 'landscape' ? 16 / 9 : 9 / 19.5}
+                onCropChange={setCrop}
+                onCropComplete={(_, area) => setCroppedAreaPixels(area)}
+                onZoomChange={setZoom}
+                showGrid
+              />
+            </div>
+
+            <div className="flex items-center gap-3 border-t border-white/10 p-4">
+              <span className="text-xs text-slate-400">Zoom</span>
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.01}
+                value={zoom}
+                onChange={(event) => setZoom(Number(event.target.value))}
+                className="min-w-0 flex-1 accent-[#7700ff]"
+                aria-label="Bildzoom"
+              />
+              <button type="button" onClick={closeCropper} className="rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10">
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={uploadCroppedImage}
+                disabled={isCropSaving || !croppedAreaPixels}
+                className="flex items-center gap-2 rounded-lg bg-[#7700ff] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#6500dc] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isCropSaving && <Loader2 size={15} className="animate-spin" />}
+                {isCropSaving ? 'Speichern...' : 'Bild zuschneiden'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Lightbox */}
+      {isImageLightboxOpen && (
+        <div
+          className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => setIsImageLightboxOpen(false)}
+        >
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsImageLightboxOpen(false);
+            }}
+            className="absolute top-5 right-5 z-[120] bg-black/60 hover:bg-black/80 text-white rounded-full p-2 border border-white/20"
+            title="Schließen"
+          >
+            <X size={22} />
+          </button>
+
+          <div
+            className="relative w-full h-full max-w-7xl max-h-[92vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={editedProject.images?.[currentImageIndex] || fallbackImage}
+              alt={editedProject.title}
+              className="absolute inset-0 w-full h-full object-cover blur-3xl scale-110 opacity-35"
+              aria-hidden="true"
+            />
+
+            <img
+              src={editedProject.images?.[currentImageIndex] || fallbackImage}
+              alt={editedProject.title}
+              className="relative z-10 max-h-full max-w-full object-contain rounded-2xl shadow-2xl ring-1 ring-white/20"
+            />
+
+            <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-white/10" />
+
+            {(editedProject.images?.length || 0) > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    prevImage();
+                  }}
+                  className="absolute left-3 md:left-5 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/70 text-white p-3 rounded-full border border-white/20"
+                  title="Vorheriges Bild"
+                >
+                  <ChevronLeft size={24} />
+                </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    nextImage();
+                  }}
+                  className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 z-20 bg-black/50 hover:bg-black/70 text-white p-3 rounded-full border border-white/20"
+                  title="Nächstes Bild"
+                >
+                  <ChevronRight size={24} />
+                </button>
+
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full bg-black/45 border border-white/15 text-xs text-white">
+                  {currentImageIndex + 1} / {editedProject.images.length}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

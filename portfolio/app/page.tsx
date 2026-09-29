@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, useSpring, useMotionValue } from 'framer-motion';
 import { 
   DndContext, 
-  KeyboardSensor, 
   MouseSensor, 
   TouchSensor, 
   useSensor, 
@@ -12,8 +11,7 @@ import {
   closestCenter,
   DragOverlay,
   DragEndEvent,
-  DragStartEvent,
-  KeyboardCode
+  DragStartEvent
 } from '@dnd-kit/core';
 import { 
   SortableContext, 
@@ -30,6 +28,16 @@ import { User } from '@supabase/supabase-js';
 import { Edit3, Save, X, Plus } from 'lucide-react';
 
 export default function Home() {
+  const toBooleanFlag = (value: unknown): boolean => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'true' || normalized === 't' || normalized === '1';
+    }
+    return false;
+  };
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [originalProjects, setOriginalProjects] = useState<Project[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -37,6 +45,8 @@ export default function Home() {
   // Mouse position state for background effect
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
+  const lastMousePosition = useRef({ x: 0, y: 0 });
+  const mainRef = useRef<HTMLElement>(null);
 
   // Smooth springs for blob movement with different characteristics for organic feel
   const springX = useSpring(mouseX, { stiffness: 50, damping: 20 });
@@ -46,18 +56,26 @@ export default function Home() {
   const springY2 = useSpring(mouseY, { stiffness: 30, damping: 25 });
 
   useEffect(() => {
+    const updateBackgroundPosition = () => {
+      const { x, y } = lastMousePosition.current;
+      const mainTop = mainRef.current?.getBoundingClientRect().top ?? 0;
+      const mainDocumentTop = mainTop + window.scrollY;
+      mouseX.set(x - 144);
+      mouseY.set(y + window.scrollY - mainDocumentTop - 144);
+    };
+
     const handleMouseMove = (e: MouseEvent) => {
-      // Center the 72x72 (288px) blobs. 
-      // Add small offset to X2/Y2 in the spring target via the hook config? 
-      // No, let's just use the same target but different springs to create lag.
-      // We can offset the SECOND blob slightly so they aren't perfectly stacked at rest?
-      // Actually, let's just update the target values. 
-      mouseX.set(e.clientX - 144);
-      mouseY.set(e.clientY - 144);
+      lastMousePosition.current = { x: e.clientX, y: e.clientY };
+      updateBackgroundPosition();
     };
 
     window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+    window.addEventListener('scroll', updateBackgroundPosition, { passive: true });
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('scroll', updateBackgroundPosition);
+    };
   }, [mouseX, mouseY]);
 
   const sensors = useSensors(
@@ -72,14 +90,8 @@ export default function Home() {
         tolerance: 5,
       },
     }),
-    // Enter Taste deaktivieren für Drag-Start, damit man in Inputs Enter drücken kann
-    useSensor(KeyboardSensor, {
-      keyboardCodes: {
-        start: [KeyboardCode.Space],
-        cancel: [KeyboardCode.Esc],
-        end: [KeyboardCode.Space, KeyboardCode.Enter],
-      }
-    })
+    // KeyboardSensor bewusst deaktiviert:
+    // Space in Input/Textarea darf nie einen Drag starten.
   );
 
   const [user, setUser] = useState<User | null>(null);
@@ -94,35 +106,73 @@ export default function Home() {
     const { data, error } = await supabase
       .from('projects')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false, nullsFirst: false });
 
     if (error) console.error(error);
     if (data) {
       // Filter out about page
       const filteredData = data.filter((p: any) => p.title !== 'About-Page-Data-Do-Not-Delete');
-      
-      // Group by title, keep only the newest (already sorted by created_at desc)
-      const uniqueProjectsMap = new Map();
-      filteredData.forEach(p => {
-         if (!uniqueProjectsMap.has(p.title)) {
-             uniqueProjectsMap.set(p.title, p);
-         }
+
+      // Sort newest first, then keep first row per normalized title.
+      const uniqueProjectsMap = new Map<string, any>();
+      const getTimestamp = (value: unknown) => {
+        if (typeof value !== 'string' || value.length === 0) return 0;
+        const t = Date.parse(value);
+        return Number.isNaN(t) ? 0 : t;
+      };
+
+      const normalizeTitle = (value: unknown) => String(value || '').trim().toLowerCase();
+
+      const newestFirst = [...filteredData].sort((a: any, b: any) => {
+        const tsDiff = getTimestamp(b.created_at) - getTimestamp(a.created_at);
+        if (tsDiff !== 0) return tsDiff;
+
+        const rawCreatedA = typeof a.created_at === 'string' ? a.created_at : '';
+        const rawCreatedB = typeof b.created_at === 'string' ? b.created_at : '';
+        const rawDiff = rawCreatedB.localeCompare(rawCreatedA);
+        if (rawDiff !== 0) return rawDiff;
+
+        const hiddenA = toBooleanFlag(a.is_hidden);
+        const hiddenB = toBooleanFlag(b.is_hidden);
+        if (hiddenA !== hiddenB) return hiddenB ? 1 : -1;
+
+        return String(b.id).localeCompare(String(a.id));
       });
-      
-      let uniqueProjects = Array.from(uniqueProjectsMap.values());
+
+      const latestHiddenByTitle = new Map<string, boolean>();
+
+      newestFirst.forEach((p: any) => {
+        const key = normalizeTitle(p.title);
+        if (!latestHiddenByTitle.has(key)) {
+          latestHiddenByTitle.set(key, toBooleanFlag(p.is_hidden));
+        }
+
+        if (!uniqueProjectsMap.has(key)) {
+          uniqueProjectsMap.set(key, p);
+        }
+      });
+
+      const uniqueProjects = Array.from(uniqueProjectsMap.values());
       
       // Re-sort by sort_order
       uniqueProjects.sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-      const safeData = uniqueProjects.map((p: any) => ({
-        ...p,
-        platforms: {
-          apple: p.platforms?.apple || '',
-          android: p.platforms?.android || '',
-          web: p.platforms?.web || '',
-          windows: p.platforms?.windows || '' 
-        }
-      }));
+      const safeData = uniqueProjects.map((p: any) => {
+        const key = normalizeTitle(p.title);
+        const latestHidden = latestHiddenByTitle.get(key);
+
+        return {
+          ...p,
+          is_hidden: typeof latestHidden === 'boolean' ? latestHidden : toBooleanFlag(p.is_hidden),
+          is_private: toBooleanFlag(p.is_private),
+          platforms: {
+            apple: p.platforms?.apple || '',
+            android: p.platforms?.android || '',
+            web: p.platforms?.web || '',
+            windows: p.platforms?.windows || ''
+          }
+        };
+      });
       setProjects(safeData as Project[]);
       setOriginalProjects(JSON.parse(JSON.stringify(safeData))); // Deep copy for change detection
     }
@@ -165,7 +215,10 @@ export default function Home() {
       .from('projects')
       .insert([{
         ...newProject,
-        sort_order: projects.length // Add to end
+        sort_order: projects.length, // Add to end
+        created_at: new Date().toISOString(),
+        is_hidden: Boolean(newProject.is_hidden),
+        is_private: Boolean(newProject.is_private)
       }])
       .select()
       .single();
@@ -200,8 +253,8 @@ export default function Home() {
       sort_order: index
     }));
 
-    // We send updates one by one.
-    // Instead of UPDATE, we do INSERT to create a new version history entry.
+    // We send updates one by one and update the active row by ID.
+    // This avoids duplicate title versions overriding is_hidden on reload.
     for (const project of updates) {
       // Check if project actually changed compared to original
       const original = originalProjects.find(op => op.id === project.id);
@@ -239,13 +292,17 @@ export default function Home() {
           githubUrl: project.githubUrl,
           collaborators: project.collaborators,
           sort_order: project.sort_order,
-          is_hidden: project.is_hidden,
-          is_private: project.is_private
+          is_hidden: Boolean(project.is_hidden),
+          is_private: Boolean(project.is_private)
       };
-      
+
+      // INSERT-only versioning avoids PATCH 403 in strict RLS setups.
       const { error } = await supabase
         .from('projects')
-        .insert([payload]);
+        .insert([{
+          ...payload,
+          created_at: new Date().toISOString(),
+        }]);
 
       if (error) {
         console.error("Speicher-Fehler für ID " + project.id, error);
@@ -284,23 +341,23 @@ export default function Home() {
     setActiveId(null);
   };
 
-  const filteredProjects = isEditMode ? projects : projects.filter(p => !p.is_hidden);
+  const filteredProjects = isEditMode ? projects : projects.filter((p) => !toBooleanFlag(p.is_hidden));
 
   if (loading && projects.length === 0) return <div className="h-screen flex items-center justify-center">Lade Portfolio...</div>;
 
   return (
-    <main className="relative min-h-[calc(100vh-80px)] overflow-hidden flex flex-col items-center p-6 lg:p-12">
+    <main ref={mainRef} className="relative min-h-[calc(100vh-80px)] overflow-hidden flex flex-col items-center p-6 lg:p-12">
       {/* Dynamic Background */}
       <motion.div 
         style={{ x: springX, y: springY }}
-        className="fixed top-0 left-0 pointer-events-none z-0"
+        className="absolute top-0 left-0 pointer-events-none z-0"
       >
         <div className="w-72 h-72 bg-[#7700ff] rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-[100px] opacity-40 dark:opacity-30 animate-blob" />
       </motion.div>
 
       <motion.div 
         style={{ x: springX2, y: springY2 }}
-        className="fixed top-0 left-0 pointer-events-none z-0"
+        className="absolute top-0 left-0 pointer-events-none z-0"
       >
         <div className="w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply dark:mix-blend-screen filter blur-[100px] opacity-40 dark:opacity-30 animate-blob animation-delay-2000" />
       </motion.div>

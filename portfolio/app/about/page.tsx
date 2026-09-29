@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, useSpring, useMotionValue } from 'framer-motion';
 import { Edit3, Save, X, ImagePlus, Loader2, History } from 'lucide-react';
 import { supabase } from '@/utils/supabase';
@@ -13,6 +13,25 @@ interface AboutContent {
   text: string;
   imageUrl: string;
 }
+
+interface AboutVersionRow {
+  id: string;
+  title: string;
+  description: string | null;
+  images: string[] | null;
+  technologies: string[] | null;
+  created_at: string | null;
+  is_private?: boolean;
+  is_hidden?: boolean;
+  platforms?: Record<string, string>;
+  date?: string;
+  sort_order?: number;
+  githubUrl?: string | null;
+  liveUrl?: string | null;
+}
+
+const ABOUT_RECORD_TITLE = 'About-Page-Data-Do-Not-Delete';
+const ABOUT_RECORD_TITLE_NORMALIZED = ABOUT_RECORD_TITLE.trim().toLowerCase();
 
 export default function AboutPage() {
   const [content, setContent] = useState<AboutContent>({
@@ -27,34 +46,63 @@ export default function AboutPage() {
   const [uploading, setUploading] = useState(false);
   
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [historyVersions, setHistoryVersions] = useState<any[]>([]);
+  const [historyVersions, setHistoryVersions] = useState<AboutVersionRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [previewContent, setPreviewContent] = useState<AboutContent | null>(null);
+
+  const fetchAboutVersions = useCallback(async (): Promise<AboutVersionRow[]> => {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('title', ABOUT_RECORD_TITLE)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Fehler beim Laden der About-Versionen:', error);
+      return [] as AboutVersionRow[];
+    }
+
+    let rows = data ?? [];
+
+    // Fallback fuer aeltere/inkonsistente Titelvarianten in bestehenden Daten.
+    if (rows.length === 0) {
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('projects')
+        .select('*')
+        .ilike('title', `%${ABOUT_RECORD_TITLE}%`)
+        .order('created_at', { ascending: false });
+
+      if (fallbackError) {
+        console.error('Fehler beim Fallback-Laden der About-Versionen:', fallbackError);
+      } else {
+        rows = fallbackData ?? [];
+      }
+    }
+
+    const filtered = rows.filter((row) => {
+      const rowTitle = typeof row.title === 'string' ? row.title.trim().toLowerCase() : '';
+      return rowTitle === ABOUT_RECORD_TITLE_NORMALIZED;
+    });
+
+    return filtered as AboutVersionRow[];
+  }, []);
 
   const fetchHistory = async () => {
     setIsHistoryModalOpen(true);
     setHistoryLoading(true);
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('title', 'About-Page-Data-Do-Not-Delete')
-      .order('created_at', { ascending: false });
-    
-    console.log("FETCHED ABOUT DATA:", data, "ERROR:", error);
-    if (data) {
-      setHistoryVersions(data);
-    }
+    const versions = await fetchAboutVersions();
+    setHistoryVersions(versions);
     setHistoryLoading(false);
   };
 
-  const handleRestoreVersion = async (oldVersion: any) => {
+  const handleRestoreVersion = async (oldVersion: AboutVersionRow) => {
     if (!confirm('Diese alte Version als neue aktuelle Version wiederherstellen?')) return;
     
     const payload = {
-        title: oldVersion.title, 
+      title: ABOUT_RECORD_TITLE,
         description: oldVersion.description,
         images: oldVersion.images,
-        is_hidden: oldVersion.is_hidden,
+        is_hidden: false,
         is_private: false, // changed for visibility
         technologies: oldVersion.technologies,
         platforms: oldVersion.platforms,
@@ -91,34 +139,12 @@ export default function AboutPage() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [mouseX, mouseY]);
 
-  // Auth & Data fetching
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    fetchContent();
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const fetchContent = async () => {
+  const fetchContent = useCallback(async (): Promise<void> => {
     setLoading(true);
-    // Immer nur den aktuellsten Eintrag holen
-    const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('title', 'About-Page-Data-Do-Not-Delete')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        ;
+    const versions = await fetchAboutVersions();
 
-    console.log("FETCHED ABOUT DATA:", data, "ERROR:", error);
-    if (data && data.length > 0) {
-        const latestData = data[0];
+    if (versions.length > 0) {
+        const latestData = versions[0];
         const newContent = {
             id: latestData.id,
             headline: latestData.technologies?.[0] || 'Über mich',
@@ -129,7 +155,21 @@ export default function AboutPage() {
         setOriginalContent(newContent);
     }
     setLoading(false);
-  };
+  }, [fetchAboutVersions]);
+
+  // Auth & Data fetching
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      await fetchContent();
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setUser(session?.user ?? null);
+      await fetchContent();
+    });
+
+    return () => subscription.unsubscribe();
+  }, [fetchContent]);
 
   const saveContent = async () => {
     // Only save if there's actual change
@@ -148,10 +188,10 @@ export default function AboutPage() {
     // Standardized payload matching AddProjectModal structure
     // This reduces the chance of database constraint violations
     const payload = {
-        title: 'About-Page-Data-Do-Not-Delete', 
+      title: ABOUT_RECORD_TITLE,
         description: content.text,
         images: content.imageUrl ? [content.imageUrl] : [],
-        is_hidden: true,
+        is_hidden: false,
         is_private: false, // Must be false so public users can see the About page
         // Using technologies[0] for storing the headline
         technologies: [content.headline],
@@ -173,9 +213,10 @@ export default function AboutPage() {
         setIsEditMode(false);
         fetchContent();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('Unexpected error:', err);
-      alert("Unerwarteter Fehler: " + (err.message || String(err)));
+      alert("Unerwarteter Fehler: " + message);
     } finally {
       setLoading(false);
     }
@@ -337,6 +378,11 @@ export default function AboutPage() {
                 <div className="flex justify-center p-8"><Loader2 className="animate-spin text-[#7700ff]" size={32} /></div>
               ) : (
                 <div className="space-y-4">
+                  {historyVersions.length === 0 && (
+                    <div className="text-sm text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-white/20">
+                      Keine Versionen gefunden.
+                    </div>
+                  )}
                   {historyVersions.map((v, i) => {
                     const isLatest = i === 0;
                     const dateStr = v.created_at ? new Date(v.created_at).toLocaleString('de-DE') : 'Unbekannt';
