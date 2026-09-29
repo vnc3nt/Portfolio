@@ -6,7 +6,7 @@ import Cropper, { type Area } from 'react-easy-crop';
 import { Github, X, ImagePlus, Loader2, Trash2, History, ChevronLeft, ChevronRight, Globe, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import PlatformBadge from './PlatformBadge';
-import { GitHubContributor } from '../utils/github';
+import type { GitHubContributor } from '../utils/github';
 import { AndroidIcon, AppleIcon, WindowsIcon } from './CustomIcons';
 import { LanguageSwitch, useLanguage, type Language } from './LanguageProvider';
 import { localizedText } from '../utils/portfolioLogic';
@@ -121,24 +121,26 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     setIsTechExpanded(false);
   }, [project.id, isEditMode]);
 
+  const imageCount = project.images?.length || 0;
+
   const nextImage = useCallback((e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setCurrentImageIndex((prev) => (prev + 1) % (project.images?.length || 1));
-  }, [project.images]);
+    setCurrentImageIndex((prev) => (prev + 1) % (imageCount || 1));
+  }, [imageCount]);
 
   const prevImage = useCallback((e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setCurrentImageIndex((prev) => (prev - 1 + (project.images?.length || 1)) % (project.images?.length || 1));
-  }, [project.images]);
+    setCurrentImageIndex((prev) => (prev - 1 + (imageCount || 1)) % (imageCount || 1));
+  }, [imageCount]);
 
   useEffect(() => {
-    if (!isHovered && !isImageLightboxOpen && (project.images?.length || 0) > 1 && !isEditMode) {
+    if (!isHovered && !isImageLightboxOpen && imageCount > 1 && !isEditMode) {
       const timer = setInterval(() => {
         nextImage();
       }, 5000);
       return () => clearInterval(timer);
     }
-  }, [isHovered, isImageLightboxOpen, project.images, isEditMode, nextImage]);
+  }, [isHovered, isImageLightboxOpen, imageCount, isEditMode, nextImage]);
 
   useEffect(() => {
     if (!isImageLightboxOpen) return;
@@ -395,7 +397,10 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 className={imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? 'hidden' : 'absolute inset-3 h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] object-contain rounded-lg shadow-lg ring-1 ring-black/10 dark:ring-white/10'}
               />
               {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' && (
-                <div className="absolute left-1/2 top-1/2 h-44 w-24 -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]">
+                <div
+                  className="absolute left-1/2 top-1/2 w-auto max-w-[42%] -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                  style={{ height: 'min(90%, calc(100% - 1.5rem))', aspectRatio: '9 / 19.5' }}
+                >
                   <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
                     <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
                     <img
@@ -857,8 +862,9 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
             onClick={(e) => e.stopPropagation()}
           >
             {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? (
-              <div
-                className="relative z-10 h-[56.7%] max-h-[56.7%] max-w-[calc(100vw-3rem)] w-auto aspect-[9/19.5] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                <div
+                  className="relative z-10 w-auto max-w-[calc(100vw-2rem)] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                  style={{ height: 'min(90%, calc(100dvh - 6rem))', aspectRatio: '9 / 19.5' }}
                 style={{ borderRadius: '22.5% / 10.4%' }}
               >
                 <div className="relative h-full w-full overflow-hidden bg-black" style={{ borderRadius: '18.5% / 8.5%' }}>
