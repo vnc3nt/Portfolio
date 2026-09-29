@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useSyncExternalStore, type ReactNode } from 'react';
 
 export type Language = 'de' | 'en';
 
@@ -11,19 +11,23 @@ interface LanguageContextValue {
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
 
-export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>('de');
+const getStoredLanguage = (): Language => {
+  if (typeof window === 'undefined') return 'de';
+  const storedLanguage = window.localStorage.getItem('portfolio-language');
+  return storedLanguage === 'en' ? 'en' : 'de';
+};
 
-  useEffect(() => {
-    const storedLanguage = window.localStorage.getItem('portfolio-language');
-    if (storedLanguage === 'de' || storedLanguage === 'en') {
-      setLanguageState(storedLanguage);
-    }
-  }, []);
+const subscribeToLanguage = (onChange: () => void) => {
+  window.addEventListener('portfolio-language-change', onChange);
+  return () => window.removeEventListener('portfolio-language-change', onChange);
+};
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const language = useSyncExternalStore(subscribeToLanguage, getStoredLanguage, (): Language => 'de');
 
   const setLanguage = (nextLanguage: Language) => {
-    setLanguageState(nextLanguage);
     window.localStorage.setItem('portfolio-language', nextLanguage);
+    window.dispatchEvent(new Event('portfolio-language-change'));
   };
 
   return (

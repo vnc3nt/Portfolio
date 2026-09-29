@@ -27,6 +27,26 @@ import { supabase } from "../utils/supabase";
 import { User } from '@supabase/supabase-js';
 import { Edit3, Save, X, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useLanguage } from '../components/LanguageProvider';
+import { hasProjectContentChanges } from '../utils/portfolioLogic';
+
+interface RawProjectRow {
+  id: string;
+  title: string;
+  title_en?: string | null;
+  description?: string | null;
+  description_en?: string | null;
+  images?: string[] | null;
+  date?: string | null;
+  technologies?: string[] | null;
+  platforms?: { apple?: string; android?: string; web?: string; windows?: string } | null;
+  githubUrl?: string | null;
+  collaborators?: Project['collaborators'];
+  created_at?: string | null;
+  sort_order?: number | null;
+  is_hidden?: boolean | string | number | null;
+  is_private?: boolean | string | number | null;
+  is_deleted?: boolean | string | number | null;
+}
 
 export default function Home() {
   const { language } = useLanguage();
@@ -120,10 +140,10 @@ export default function Home() {
     if (error) console.error(error);
     if (data) {
       // Filter out about page
-      const filteredData = data.filter((p: any) => p.title !== 'About-Page-Data-Do-Not-Delete');
+      const filteredData = (data as RawProjectRow[]).filter((p) => p.title !== 'About-Page-Data-Do-Not-Delete');
 
       // Sort newest first, then keep first row per normalized title.
-      const uniqueProjectsMap = new Map<string, any>();
+      const uniqueProjectsMap = new Map<string, RawProjectRow>();
       const getTimestamp = (value: unknown) => {
         if (typeof value !== 'string' || value.length === 0) return 0;
         const t = Date.parse(value);
@@ -132,7 +152,7 @@ export default function Home() {
 
       const normalizeTitle = (value: unknown) => String(value || '').trim().toLowerCase();
 
-      const newestFirst = [...filteredData].sort((a: any, b: any) => {
+      const newestFirst = [...filteredData].sort((a, b) => {
         const tsDiff = getTimestamp(b.created_at) - getTimestamp(a.created_at);
         if (tsDiff !== 0) return tsDiff;
 
@@ -150,7 +170,7 @@ export default function Home() {
 
       const latestHiddenByTitle = new Map<string, boolean>();
 
-      newestFirst.forEach((p: any) => {
+      newestFirst.forEach((p) => {
         const key = normalizeTitle(p.title);
         if (!latestHiddenByTitle.has(key)) {
           latestHiddenByTitle.set(key, toBooleanFlag(p.is_hidden));
@@ -164,9 +184,9 @@ export default function Home() {
       const uniqueProjects = Array.from(uniqueProjectsMap.values());
       
       // Re-sort by sort_order
-      uniqueProjects.sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0));
+      uniqueProjects.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
 
-      const safeData = uniqueProjects.map((p: any) => {
+      const safeData = uniqueProjects.map((p) => {
         const key = normalizeTitle(p.title);
         const latestHidden = latestHiddenByTitle.get(key);
 
@@ -204,7 +224,7 @@ export default function Home() {
       if (!session?.user) setIsEditMode(false);
     });
 
-    loadProjects();
+    queueMicrotask(() => { void loadProjects(); });
 
     return () => subscription.unsubscribe();
   }, []);
@@ -400,29 +420,7 @@ export default function Home() {
       const original = originalProjects.find(op => op.id === project.id);
       if (!original) continue;
 
-      const contentChanged = JSON.stringify({
-        title: project.title,
-        title_en: project.title_en,
-        description: project.description,
-        description_en: project.description_en,
-        date: project.date,
-        technologies: project.technologies,
-        platforms: project.platforms,
-        images: project.images,
-        githubUrl: project.githubUrl,
-        collaborators: project.collaborators,
-      }) !== JSON.stringify({
-        title: original.title,
-        title_en: original.title_en,
-        description: original.description,
-        description_en: original.description_en,
-        date: original.date,
-        technologies: original.technologies,
-        platforms: original.platforms,
-        images: original.images,
-        githubUrl: original.githubUrl,
-        collaborators: original.collaborators,
-      });
+      const contentChanged = hasProjectContentChanges(project, original);
 
       const metadataChanged = project.sort_order !== original.sort_order
         || Boolean(project.is_hidden) !== Boolean(original.is_hidden)

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "fetch_test*.js",
+    "sql_test.js",
+    "test_tables.js",
   ]),
 ]);
 

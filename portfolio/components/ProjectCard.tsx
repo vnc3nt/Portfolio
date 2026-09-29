@@ -9,6 +9,7 @@ import PlatformBadge from './PlatformBadge';
 import { GitHubContributor } from '../utils/github';
 import { AndroidIcon, AppleIcon, WindowsIcon } from './CustomIcons';
 import { LanguageSwitch, useLanguage, type Language } from './LanguageProvider';
+import { localizedText } from '../utils/portfolioLogic';
 
 export interface Project {
   id: string;
@@ -62,8 +63,8 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
   const [titleLanguage, setTitleLanguage] = useState<Language>(language);
   const [descriptionLanguage, setDescriptionLanguage] = useState<Language>(language);
 
-  const visibleTitle = language === 'en' ? (editedProject.title_en || editedProject.title) : editedProject.title;
-  const visibleDescription = language === 'en' ? (editedProject.description_en || editedProject.description) : editedProject.description;
+  const visibleTitle = localizedText(language, editedProject.title, editedProject.title_en);
+  const visibleDescription = localizedText(language, editedProject.description, editedProject.description_en);
 
   const fetchHistory = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -589,7 +590,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
 
         {/* Platform Badges */}
         {isEditMode ? (
-          <div className={`${isEditMode ? 'mt-auto' : 'mt-0'} grid grid-cols-1 gap-2 pt-5`} onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
+          <div className="mt-auto grid grid-cols-1 gap-2 pt-5" onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
              <div className="flex items-center gap-3 bg-black/5 dark:bg-white/5 p-2 rounded text-xs">
                 <Globe size={16} className="text-gray-600 dark:text-gray-300 shrink-0" />
                 <input 
@@ -628,7 +629,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
              </div>
           </div>
         ) : (
-          <div className={`${isEditMode ? 'mt-auto' : 'mt-0'} flex flex-wrap gap-2 pt-5`} onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
+          <div className={`${(editedProject.collaborators?.length || 0) > 0 ? 'mt-0' : 'mt-auto'} flex flex-wrap gap-2 pt-5`} onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
             <PlatformBadge 
               icon={Globe} 
               label="Web" 
@@ -710,7 +711,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                   {historyVersions.map((v, i) => {
                     const isLatest = i === 0;
                     // Supabase auto-adds created_at typically, if it exists
-                    const dateStr = (v as any).created_at ? new Date((v as any).created_at).toLocaleString('de-DE') : 'Unbekanntes Datum';
+                    const dateStr = v.created_at ? new Date(v.created_at).toLocaleString('de-DE') : 'Unbekanntes Datum';
                     
                     return (
                       <div key={v.id} className={`p-4 rounded-xl border ${isLatest ? 'border-[#7700ff] bg-[#7700ff]/5' : 'border-gray-200 dark:border-white/10 bg-black/5'} flex justify-between items-center`}>

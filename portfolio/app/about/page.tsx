@@ -6,6 +6,7 @@ import { Edit3, Save, X, ImagePlus, Loader2, History } from 'lucide-react';
 import { supabase } from '@/utils/supabase';
 import { User } from '@supabase/supabase-js';
 import { LanguageSwitch, useLanguage, type Language } from '@/components/LanguageProvider';
+import { localizedText } from '@/utils/portfolioLogic';
 
 // Define the shape of our About content
 interface AboutContent {
@@ -60,8 +61,8 @@ export default function AboutPage() {
   const [headlineLanguage, setHeadlineLanguage] = useState<Language>(language);
   const [textLanguage, setTextLanguage] = useState<Language>(language);
 
-  const visibleHeadline = language === 'en' ? (content.headlineEn || content.headline) : content.headline;
-  const visibleText = language === 'en' ? (content.textEn || content.text) : content.text;
+  const visibleHeadline = localizedText(language, content.headline, content.headlineEn);
+  const visibleText = localizedText(language, content.text, content.textEn);
 
   const fetchAboutVersions = useCallback(async (): Promise<AboutVersionRow[]> => {
     const { data, error } = await supabase
