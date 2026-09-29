@@ -25,9 +25,11 @@ import AddProjectModal from "../components/AddProjectModal";
 import { SortableItem } from "../components/SortableItem";
 import { supabase } from "../utils/supabase";
 import { User } from '@supabase/supabase-js';
-import { Edit3, Save, X, Plus } from 'lucide-react';
+import { Edit3, Save, X, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { useLanguage } from '../components/LanguageProvider';
 
 export default function Home() {
+  const { language } = useLanguage();
   const toBooleanFlag = (value: unknown): boolean => {
     if (typeof value === 'boolean') return value;
     if (typeof value === 'number') return value === 1;
@@ -98,11 +100,18 @@ export default function Home() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [deletedProjectIds, setDeletedProjectIds] = useState<string[]>([]);
+  const [deletedProjects, setDeletedProjects] = useState<Project[]>([]);
+  const [pendingDeletedProjects, setPendingDeletedProjects] = useState<Project[]>([]);
+  const [pendingPermanentDeletes, setPendingPermanentDeletes] = useState<Project[]>([]);
+  const [pendingRestoredProjects, setPendingRestoredProjects] = useState<Project[]>([]);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
+  const [restoringProjectId, setRestoringProjectId] = useState<string | null>(null);
 
   const loadProjects = async () => {
     setLoading(true);
-    setDeletedProjectIds([]); // Reset deleted tracker on load/cancel
+    setPendingDeletedProjects([]); // Reset unsaved deletions on load/cancel
+    setPendingPermanentDeletes([]); // Reset unsaved permanent deletions on load/cancel
+    setPendingRestoredProjects([]); // Reset unsaved restorations on load/cancel
     const { data, error } = await supabase
       .from('projects')
       .select('*')
@@ -165,6 +174,7 @@ export default function Home() {
           ...p,
           is_hidden: typeof latestHidden === 'boolean' ? latestHidden : toBooleanFlag(p.is_hidden),
           is_private: toBooleanFlag(p.is_private),
+          is_deleted: toBooleanFlag(p.is_deleted),
           platforms: {
             apple: p.platforms?.apple || '',
             android: p.platforms?.android || '',
@@ -173,8 +183,10 @@ export default function Home() {
           }
         };
       });
-      setProjects(safeData as Project[]);
-      setOriginalProjects(JSON.parse(JSON.stringify(safeData))); // Deep copy for change detection
+      const typedProjects = safeData as Project[];
+      setProjects(typedProjects.filter((project) => !project.is_deleted));
+      setDeletedProjects(typedProjects.filter((project) => project.is_deleted));
+      setOriginalProjects(JSON.parse(JSON.stringify(typedProjects.filter((project) => !project.is_deleted)))); // Deep copy for change detection
     }
     setLoading(false);
   };
@@ -199,14 +211,20 @@ export default function Home() {
 
   const handleProjectUpdate = (updatedProject: Project) => {
     setProjects(prevProjects => 
-      prevProjects.map(p => p.id === updatedProject.id ? updatedProject : p)
+      prevProjects.map(p => p.id === updatedProject.id || p.title === updatedProject.title ? updatedProject : p)
     );
+    setPendingRestoredProjects((restoredProjects) => restoredProjects.map((project) => (
+      project.id === updatedProject.id ? updatedProject : project
+    )));
   };
 
   const handleDeleteProject = (projectId: string) => {
-    // Only "soft delete" in local state
-    setDeletedProjectIds(prev => [...prev, projectId]);
-    setProjects(prev => prev.filter(p => p.id !== projectId));
+    const projectToDelete = projects.find((project) => project.id === projectId);
+    if (projectToDelete) {
+      setPendingDeletedProjects((deleted) => [...deleted, projectToDelete]);
+      setDeletedProjects((deleted) => [...deleted, { ...projectToDelete, is_deleted: true }]);
+    }
+    setProjects((prev) => prev.filter((project) => project.id !== projectId));
   };
 
   const handleAddProject = async (newProject: Omit<Project, 'id'>) => {
@@ -230,8 +248,60 @@ export default function Home() {
     }
 
     if (data) {
-      setProjects([...projects, data as Project]);
+      const addedProject = data as Project;
+      setProjects([...projects, addedProject]);
+      setOriginalProjects((currentProjects) => [...currentProjects, JSON.parse(JSON.stringify(addedProject))]);
     }
+  };
+
+  const restoreDeletedProject = async (deletedProject: Project) => {
+    setRestoringProjectId(deletedProject.id);
+
+    const pendingDeletion = pendingDeletedProjects.some((project) => project.id === deletedProject.id);
+    if (pendingDeletion) {
+      setPendingDeletedProjects((projectsToRestore) => projectsToRestore.filter((project) => project.id !== deletedProject.id));
+      setDeletedProjects((projectsInTrash) => projectsInTrash.filter((project) => project.id !== deletedProject.id));
+      setProjects((currentProjects) => [...currentProjects, { ...deletedProject, is_deleted: false }]);
+      setRestoringProjectId(null);
+      return;
+    }
+
+    const { data: versions, error: versionsError } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('title', deletedProject.title)
+      .order('created_at', { ascending: false });
+
+    const previousVersion = (versions as Project[] | null)?.find((version) => !toBooleanFlag(version.is_deleted));
+    if (versionsError || !previousVersion) {
+      alert('Die vorherige Version konnte nicht gefunden werden.');
+      setRestoringProjectId(null);
+      return;
+    }
+
+    const restoredProject = {
+      ...previousVersion,
+      id: deletedProject.id,
+      is_deleted: false,
+    };
+    setPendingRestoredProjects((restoredProjects) => [...restoredProjects, restoredProject]);
+    setDeletedProjects((projectsInTrash) => projectsInTrash.filter((project) => project.id !== deletedProject.id));
+    setProjects((currentProjects) => [...currentProjects, restoredProject]);
+    setIsRestoreModalOpen(false);
+    setRestoringProjectId(null);
+  };
+
+  const permanentlyDeleteProject = async (deletedProject: Project) => {
+    const confirmed = confirm(
+      `"${deletedProject.title}" endgültig löschen? Alle Versionen werden unwiderruflich entfernt.`
+    );
+    if (!confirmed) return;
+
+    setRestoringProjectId(deletedProject.id);
+    setPendingDeletedProjects((pending) => pending.filter((project) => project.id !== deletedProject.id));
+    setPendingPermanentDeletes((pending) => [...pending, deletedProject]);
+    setDeletedProjects((projectsInTrash) => projectsInTrash.filter((project) => project.id !== deletedProject.id));
+    setRestoringProjectId(null);
   };
 
   const saveChangesToDatabase = async () => {
@@ -239,52 +309,132 @@ export default function Home() {
     let hasError = false;
 
     // 1. Process deletions
-    for (const id of deletedProjectIds) {
-      const { error } = await supabase.from('projects').delete().eq('id', id);
+    const permanentDeleteIds = new Set(pendingPermanentDeletes.map((project) => project.id));
+    for (const deletedProject of pendingDeletedProjects.filter((project) => !permanentDeleteIds.has(project.id))) {
+      const { error } = await supabase
+        .from('projects')
+        .insert([{
+          title: deletedProject.title,
+          title_en: deletedProject.title_en,
+          description: deletedProject.description,
+          description_en: deletedProject.description_en,
+          date: deletedProject.date,
+          technologies: deletedProject.technologies,
+          platforms: deletedProject.platforms,
+          images: deletedProject.images,
+          githubUrl: deletedProject.githubUrl,
+          collaborators: deletedProject.collaborators,
+          sort_order: deletedProject.sort_order,
+          is_hidden: Boolean(deletedProject.is_hidden),
+          is_private: Boolean(deletedProject.is_private),
+          is_deleted: true,
+          created_at: new Date().toISOString(),
+        }]);
       if (error) {
-        console.error("Lösch-Fehler für ID " + id, error);
+        console.error("Lösch-Fehler für ID " + deletedProject.id, {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
         hasError = true;
       }
     }
 
-    // 2. Save all updated/reordered projects
+    for (const deletedProject of pendingPermanentDeletes) {
+      const { error } = await supabase
+        .from('projects')
+        .delete()
+        .eq('title', deletedProject.title);
+
+      if (error) {
+        console.error("Fehler beim endgültigen Löschen für ID " + deletedProject.id, {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+        hasError = true;
+      }
+    }
+
+    const deletedIds = new Set(pendingDeletedProjects.map((project) => project.id));
+    const permanentlyDeletedIds = new Set(pendingPermanentDeletes.map((project) => project.id));
+    for (const restoredProject of pendingRestoredProjects.filter(
+      (project) => !deletedIds.has(project.id) && !permanentlyDeletedIds.has(project.id)
+    )) {
+      const { error } = await supabase.from('projects').update({
+        title: restoredProject.title,
+        title_en: restoredProject.title_en,
+        description: restoredProject.description,
+        description_en: restoredProject.description_en,
+        date: restoredProject.date,
+        technologies: restoredProject.technologies,
+        platforms: restoredProject.platforms,
+        images: restoredProject.images,
+        githubUrl: restoredProject.githubUrl,
+        collaborators: restoredProject.collaborators,
+        sort_order: restoredProject.sort_order,
+        is_hidden: Boolean(restoredProject.is_hidden),
+        is_private: Boolean(restoredProject.is_private),
+        is_deleted: false,
+      }).eq('id', restoredProject.id);
+
+      if (error) {
+        console.error("Fehler beim Wiederherstellen für ID " + restoredProject.id, error);
+        hasError = true;
+      }
+    }
+
+    // 2. Save content changes as versions and metadata changes on the current row.
     const updates = projects.map((project, index) => ({
       ...project,
       sort_order: index
     }));
+    const restoredIds = new Set(pendingRestoredProjects.map((project) => project.id));
 
-    // We send updates one by one and update the active row by ID.
-    // This avoids duplicate title versions overriding is_hidden on reload.
     for (const project of updates) {
+      if (restoredIds.has(project.id)) continue;
+
       // Check if project actually changed compared to original
       const original = originalProjects.find(op => op.id === project.id);
-      
-      let isChanged = true;
-      if (original) {
-        // Compare only the fields that we map to the database
-        // Need to stringify carefully to ignore order of keys in objects
-        const pStr = JSON.stringify({
-          title: project.title, description: project.description, date: project.date,
-          technologies: project.technologies, platforms: project.platforms, images: project.images,
-          githubUrl: project.githubUrl, collaborators: project.collaborators, sort_order: project.sort_order,
-          is_hidden: project.is_hidden, is_private: project.is_private
-        });
-        const oStr = JSON.stringify({
-          title: original.title, description: original.description, date: original.date,
-          technologies: original.technologies, platforms: original.platforms, images: original.images,
-          githubUrl: original.githubUrl, collaborators: original.collaborators, sort_order: original.sort_order,
-          is_hidden: original.is_hidden, is_private: original.is_private
-        });
-        isChanged = pStr !== oStr;
-      }
+      if (!original) continue;
 
-      if (!isChanged) {
-        continue; // Skip saving if nothing changed
-      }
+      const contentChanged = JSON.stringify({
+        title: project.title,
+        title_en: project.title_en,
+        description: project.description,
+        description_en: project.description_en,
+        date: project.date,
+        technologies: project.technologies,
+        platforms: project.platforms,
+        images: project.images,
+        githubUrl: project.githubUrl,
+        collaborators: project.collaborators,
+      }) !== JSON.stringify({
+        title: original.title,
+        title_en: original.title_en,
+        description: original.description,
+        description_en: original.description_en,
+        date: original.date,
+        technologies: original.technologies,
+        platforms: original.platforms,
+        images: original.images,
+        githubUrl: original.githubUrl,
+        collaborators: original.collaborators,
+      });
+
+      const metadataChanged = project.sort_order !== original.sort_order
+        || Boolean(project.is_hidden) !== Boolean(original.is_hidden)
+        || Boolean(project.is_private) !== Boolean(original.is_private);
+
+      if (!contentChanged && !metadataChanged) continue;
 
       const payload = {
           title: project.title,
+          title_en: project.title_en,
           description: project.description,
+          description_en: project.description_en,
           date: project.date,
           technologies: project.technologies,
           platforms: project.platforms,
@@ -293,16 +443,25 @@ export default function Home() {
           collaborators: project.collaborators,
           sort_order: project.sort_order,
           is_hidden: Boolean(project.is_hidden),
-          is_private: Boolean(project.is_private)
+          is_private: Boolean(project.is_private),
+          is_deleted: Boolean(project.is_deleted)
       };
 
-      // INSERT-only versioning avoids PATCH 403 in strict RLS setups.
-      const { error } = await supabase
-        .from('projects')
-        .insert([{
-          ...payload,
-          created_at: new Date().toISOString(),
-        }]);
+      const { error } = contentChanged
+        ? await supabase
+          .from('projects')
+          .insert([{
+            ...payload,
+            created_at: new Date().toISOString(),
+          }])
+        : await supabase
+          .from('projects')
+          .update({
+            sort_order: project.sort_order,
+            is_hidden: Boolean(project.is_hidden),
+            is_private: Boolean(project.is_private),
+          })
+          .eq('id', project.id);
 
       if (error) {
         console.error("Speicher-Fehler für ID " + project.id, error);
@@ -315,7 +474,9 @@ export default function Home() {
     if (hasError) {
       alert("Es gab einen Fehler beim Speichern! Überprüfe die Konsole.");
     } else {
-      setDeletedProjectIds([]); // Clear deletions on success
+      setPendingDeletedProjects([]); // Clear unsaved deletions on success
+      setPendingPermanentDeletes([]); // Clear unsaved permanent deletions on success
+      setPendingRestoredProjects([]); // Clear unsaved restorations on success
       setIsEditMode(false);
       // Reload projects to update originalProjects and get the new IDs
       loadProjects();
@@ -341,9 +502,9 @@ export default function Home() {
     setActiveId(null);
   };
 
-  const filteredProjects = isEditMode ? projects : projects.filter((p) => !toBooleanFlag(p.is_hidden));
+  const filteredProjects = isEditMode ? projects : projects.filter((p) => !toBooleanFlag(p.is_hidden) && !toBooleanFlag(p.is_deleted));
 
-  if (loading && projects.length === 0) return <div className="h-screen flex items-center justify-center">Lade Portfolio...</div>;
+  if (loading && projects.length === 0) return <div className="h-screen flex items-center justify-center">{language === 'de' ? 'Lade Portfolio...' : 'Loading portfolio...'}</div>;
 
   return (
     <main ref={mainRef} className="relative min-h-[calc(100vh-80px)] overflow-hidden flex flex-col items-center p-6 lg:p-12">
@@ -381,6 +542,14 @@ export default function Home() {
                 <Plus size={18} /> Neu
               </button>
 
+              <button
+                onClick={() => setIsRestoreModalOpen(true)}
+                className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 rounded-full font-medium hover:bg-amber-600 transition-all disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={deletedProjects.length === 0}
+              >
+                <Trash2 size={18} /> Papierkorb{deletedProjects.length > 0 && ` (${deletedProjects.length})`}
+              </button>
+
               <div className="h-8 w-px bg-white/20 mx-1" />
 
               <button 
@@ -407,6 +576,73 @@ export default function Home() {
         onAdd={handleAddProject} 
         githubUsername={user?.user_metadata?.user_name || "vnc3nt"}
       />
+
+      {isRestoreModalOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setIsRestoreModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/20 bg-white shadow-2xl dark:bg-zinc-950"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-black/10 p-5 dark:border-white/10">
+              <div>
+                <h2 className="text-lg font-semibold">Papierkorb</h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Wähle ein Projekt zur Wiederherstellung oder endgültigen Löschung.</p>
+              </div>
+              <button
+                onClick={() => setIsRestoreModalOpen(false)}
+                className="rounded-full p-2 text-slate-500 hover:bg-black/5 dark:hover:bg-white/10"
+                title="Schließen"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="max-h-[50vh] space-y-2 overflow-y-auto p-5">
+              {deletedProjects.map((deletedProject) => (
+                <button
+                  key={deletedProject.id}
+                  onClick={() => restoreDeletedProject(deletedProject)}
+                  disabled={restoringProjectId !== null}
+                  className="flex w-full items-center justify-between rounded-xl border border-black/10 p-3 text-left transition-colors hover:border-amber-500 hover:bg-amber-500/10 disabled:cursor-wait disabled:opacity-60 dark:border-white/10"
+                >
+                  <span>
+                    <span className="block font-medium">{deletedProject.title}</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">Projekt aus der Historie wiederherstellen</span>
+                  </span>
+                  <span className="flex items-center gap-2 pl-3">
+                    <span
+                      className="rounded-full p-2 text-amber-500 hover:bg-amber-500/10"
+                      title="Wiederherstellen"
+                    >
+                      <RotateCcw size={18} className={restoringProjectId === deletedProject.id ? 'animate-spin' : ''} />
+                    </span>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        permanentlyDeleteProject(deletedProject);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          permanentlyDeleteProject(deletedProject);
+                        }
+                      }}
+                      className="rounded-full p-2 text-red-500 hover:bg-red-500/10"
+                      title="Unwiderruflich löschen"
+                    >
+                      <Trash2 size={18} />
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hero Section */}
       <div className="relative z-10 w-full max-w-7xl mx-auto mb-16 text-center mt-10">

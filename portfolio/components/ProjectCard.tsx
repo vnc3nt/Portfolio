@@ -8,11 +8,14 @@ import { supabase } from '../utils/supabase';
 import PlatformBadge from './PlatformBadge';
 import { GitHubContributor } from '../utils/github';
 import { AndroidIcon, AppleIcon, WindowsIcon } from './CustomIcons';
+import { LanguageSwitch, useLanguage, type Language } from './LanguageProvider';
 
 export interface Project {
   id: string;
   title: string;
+  title_en?: string;
   description: string;
+  description_en?: string;
   images: string[];
   date: string;
   technologies: string[];
@@ -22,6 +25,7 @@ export interface Project {
   platforms: { apple: string; android: string; web: string; windows?: string };
   is_hidden?: boolean;
   is_private?: boolean;
+  is_deleted?: boolean;
   sort_order: number;
   collaborators?: GitHubContributor[];
   created_at?: string;
@@ -54,6 +58,12 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
   const [previewProject, setPreviewProject] = useState<Project | null>(null);
   const [isTechExpanded, setIsTechExpanded] = useState(false);
   const [isImageLightboxOpen, setIsImageLightboxOpen] = useState(false);
+  const { language } = useLanguage();
+  const [titleLanguage, setTitleLanguage] = useState<Language>(language);
+  const [descriptionLanguage, setDescriptionLanguage] = useState<Language>(language);
+
+  const visibleTitle = language === 'en' ? (editedProject.title_en || editedProject.title) : editedProject.title;
+  const visibleDescription = language === 'en' ? (editedProject.description_en || editedProject.description) : editedProject.description;
 
   const fetchHistory = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -76,7 +86,9 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     
     const payload = {
       title: oldVersion.title,
+      title_en: oldVersion.title_en,
       description: oldVersion.description,
+      description_en: oldVersion.description_en,
       date: oldVersion.date,
       technologies: oldVersion.technologies,
       platforms: oldVersion.platforms,
@@ -85,7 +97,8 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
       collaborators: oldVersion.collaborators,
       sort_order: project.sort_order, // keep current sorting
       is_hidden: oldVersion.is_hidden,
-      is_private: oldVersion.is_private
+      is_private: oldVersion.is_private,
+      is_deleted: false
     };
 
     const { data, error } = await supabase.from('projects').insert([payload]).select().single();
@@ -310,7 +323,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
           {/* Delete Button */}
           {onDelete && (
             <button 
-              onClick={() => confirm('Projekt wirklich löschen?') && onDelete(project.id)}
+              onClick={() => confirm('Projekt in den Papierkorb verschieben?') && onDelete(project.id)}
               onMouseDown={stopPropagation}
               onTouchStart={stopPropagation}
               className="bg-red-500/80 backdrop-blur-sm p-1.5 rounded-full text-white hover:bg-red-600 shadow-md"
@@ -432,10 +445,13 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
           <div className="w-full">
             {isEditMode ? (
               <div className="space-y-2">
+                 <div className="flex justify-end">
+                   <LanguageSwitch value={titleLanguage} onChange={setTitleLanguage} />
+                 </div>
                  <input 
                   type="text" 
-                  value={editedProject.title} 
-                  onChange={(e) => handleChange('title', e.target.value)}
+                  value={titleLanguage === 'en' ? (editedProject.title_en || '') : editedProject.title}
+                  onChange={(e) => handleChange(titleLanguage === 'en' ? 'title_en' : 'title', e.target.value)}
                   onMouseDown={stopPropagation}
                   onTouchStart={stopPropagation}
                   className="w-full bg-transparent text-lg font-bold border-b border-[#7700ff]/50 focus:outline-none"
@@ -453,7 +469,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               </div>
             ) : (
               <>
-                <h3 className="text-xl font-bold tracking-tight">{editedProject.title}</h3>
+                <h3 className="text-xl font-bold tracking-tight">{visibleTitle}</h3>
                 <p className="text-xs text-gray-500 dark:text-gray-400">{editedProject.date}</p>
               </>
             )}
@@ -492,18 +508,23 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
 
         {/* Description */}
         {isEditMode ? (
-          <textarea
-            value={editedProject.description}
-            onChange={(e) => handleChange('description', e.target.value)}
-            onMouseDown={stopPropagation}
-            onTouchStart={stopPropagation}
-            className="w-full bg-black/5 dark:bg-black/20 text-sm p-2 rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-[#7700ff]"
-            rows={3}
-            placeholder="Beschreibung..."
-          />
+          <div className="space-y-2">
+            <div className="flex justify-end">
+              <LanguageSwitch value={descriptionLanguage} onChange={setDescriptionLanguage} />
+            </div>
+            <textarea
+              value={descriptionLanguage === 'en' ? (editedProject.description_en || '') : editedProject.description}
+              onChange={(e) => handleChange(descriptionLanguage === 'en' ? 'description_en' : 'description', e.target.value)}
+              onMouseDown={stopPropagation}
+              onTouchStart={stopPropagation}
+              className="w-full bg-black/5 dark:bg-black/20 text-sm p-2 rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-[#7700ff]"
+              rows={3}
+              placeholder="Beschreibung..."
+            />
+          </div>
         ) : (
           <p className="text-sm text-gray-600 dark:text-gray-300 w-full whitespace-pre-wrap leading-relaxed">
-            {editedProject.description}
+            {visibleDescription}
           </p>
         )}
 
@@ -550,7 +571,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
 
         {/* Collaborators: First one on top (highest Z-index) */}
         {(editedProject.collaborators?.length || 0) > 0 && !isEditMode && (
-          <div className="mt-4 flex -space-x-2 overflow-hidden py-1 pl-1" onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
+          <div className="mt-auto flex -space-x-2 overflow-hidden pb-1 pl-1 pt-5" onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
              {editedProject.collaborators?.map((c, index) => (
                <a 
                  key={c.login} 
@@ -568,7 +589,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
 
         {/* Platform Badges */}
         {isEditMode ? (
-          <div className="mt-auto pt-5 gap-2 grid grid-cols-1" onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
+          <div className={`${isEditMode ? 'mt-auto' : 'mt-0'} grid grid-cols-1 gap-2 pt-5`} onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
              <div className="flex items-center gap-3 bg-black/5 dark:bg-white/5 p-2 rounded text-xs">
                 <Globe size={16} className="text-gray-600 dark:text-gray-300 shrink-0" />
                 <input 
@@ -607,7 +628,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
              </div>
           </div>
         ) : (
-          <div className="mt-auto pt-5 flex flex-wrap gap-2" onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
+          <div className={`${isEditMode ? 'mt-auto' : 'mt-0'} flex flex-wrap gap-2 pt-5`} onMouseDown={stopPropagation} onTouchStart={stopPropagation}>
             <PlatformBadge 
               icon={Globe} 
               label="Web" 
@@ -665,6 +686,23 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
             </div>
 
             <div className="flex-1 overflow-y-auto p-6">
+              {previewProject && (
+                <div className="mb-8 border-b border-gray-200 pb-8 dark:border-white/10">
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="text-lg font-bold">Vorschau</h3>
+                    <button
+                      onClick={() => setPreviewProject(null)}
+                      className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-black/5 dark:hover:bg-white/10"
+                    >
+                      Schließen
+                    </button>
+                  </div>
+                  <div className="pointer-events-none origin-top opacity-80">
+                    <ProjectCard project={previewProject} isEditMode={false} />
+                  </div>
+                </div>
+              )}
+
               {historyLoading ? (
                 <div className="flex justify-center p-8"><Loader2 className="animate-spin text-[#7700ff]" size={32} /></div>
               ) : (
@@ -702,16 +740,6 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 </div>
               )}
 
-              {/* Preview Box */}
-              {previewProject && (
-                <div className="mt-8 border-t border-gray-200 dark:border-white/10 pt-8">
-                  <h3 className="text-lg font-bold mb-4">Vorschau (Read-Only)</h3>
-                  <div className="pointer-events-none opacity-80 scale-95 origin-top">
-                    {/* Render a read-only un-editable ProjectCard */}
-                    <ProjectCard project={previewProject} isEditMode={false} />
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -828,8 +856,11 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
             onClick={(e) => e.stopPropagation()}
           >
             {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? (
-              <div className="relative z-10 h-[63%] max-h-[63%] max-w-[calc(100vw-3rem)] w-auto aspect-[9/19.5] rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]">
-                <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
+              <div
+                className="relative z-10 h-[56.7%] max-h-[56.7%] max-w-[calc(100vw-3rem)] w-auto aspect-[9/19.5] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                style={{ borderRadius: '22.5% / 10.4%' }}
+              >
+                <div className="relative h-full w-full overflow-hidden bg-black" style={{ borderRadius: '18.5% / 8.5%' }}>
                   <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
                   <img
                     src={editedProject.images?.[currentImageIndex] || fallbackImage}

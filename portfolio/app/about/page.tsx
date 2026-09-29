@@ -5,12 +5,15 @@ import { motion, useSpring, useMotionValue } from 'framer-motion';
 import { Edit3, Save, X, ImagePlus, Loader2, History } from 'lucide-react';
 import { supabase } from '@/utils/supabase';
 import { User } from '@supabase/supabase-js';
+import { LanguageSwitch, useLanguage, type Language } from '@/components/LanguageProvider';
 
 // Define the shape of our About content
 interface AboutContent {
   id?: string;
   headline: string;
+  headlineEn: string;
   text: string;
+  textEn: string;
   imageUrl: string;
 }
 
@@ -28,6 +31,8 @@ interface AboutVersionRow {
   sort_order?: number;
   githubUrl?: string | null;
   liveUrl?: string | null;
+  headline_en?: string | null;
+  text_en?: string | null;
 }
 
 const ABOUT_RECORD_TITLE = 'About-Page-Data-Do-Not-Delete';
@@ -36,7 +41,9 @@ const ABOUT_RECORD_TITLE_NORMALIZED = ABOUT_RECORD_TITLE.trim().toLowerCase();
 export default function AboutPage() {
   const [content, setContent] = useState<AboutContent>({
     headline: 'Über mich',
+    headlineEn: '',
     text: 'Hier steht dein Text...',
+    textEn: '',
     imageUrl: ''
   });
   const [originalContent, setOriginalContent] = useState<AboutContent | null>(null);
@@ -49,6 +56,12 @@ export default function AboutPage() {
   const [historyVersions, setHistoryVersions] = useState<AboutVersionRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [previewContent, setPreviewContent] = useState<AboutContent | null>(null);
+  const { language } = useLanguage();
+  const [headlineLanguage, setHeadlineLanguage] = useState<Language>(language);
+  const [textLanguage, setTextLanguage] = useState<Language>(language);
+
+  const visibleHeadline = language === 'en' ? (content.headlineEn || content.headline) : content.headline;
+  const visibleText = language === 'en' ? (content.textEn || content.text) : content.text;
 
   const fetchAboutVersions = useCallback(async (): Promise<AboutVersionRow[]> => {
     const { data, error } = await supabase
@@ -109,7 +122,9 @@ export default function AboutPage() {
         date: oldVersion.date,
         sort_order: oldVersion.sort_order,
         githubUrl: oldVersion.githubUrl,
-        liveUrl: oldVersion.liveUrl
+        liveUrl: oldVersion.liveUrl,
+        headline_en: oldVersion.headline_en,
+        text_en: oldVersion.text_en
     };
 
     const { error } = await supabase.from('projects').insert([payload]);
@@ -148,7 +163,9 @@ export default function AboutPage() {
         const newContent = {
             id: latestData.id,
             headline: latestData.technologies?.[0] || 'Über mich',
+            headlineEn: latestData.headline_en || '',
             text: latestData.description || '',
+            textEn: latestData.text_en || '',
             imageUrl: latestData.images?.[0] || ''
         };
         setContent(newContent);
@@ -175,7 +192,9 @@ export default function AboutPage() {
     // Only save if there's actual change
     const isChanged = !originalContent || 
         content.headline !== originalContent.headline || 
+        content.headlineEn !== originalContent.headlineEn ||
         content.text !== originalContent.text ||
+        content.textEn !== originalContent.textEn ||
         content.imageUrl !== originalContent.imageUrl;
 
     if (!isChanged) {
@@ -190,11 +209,13 @@ export default function AboutPage() {
     const payload = {
       title: ABOUT_RECORD_TITLE,
         description: content.text,
+          text_en: content.textEn,
         images: content.imageUrl ? [content.imageUrl] : [],
         is_hidden: false,
         is_private: false, // Must be false so public users can see the About page
         // Using technologies[0] for storing the headline
         technologies: [content.headline],
+        headline_en: content.headlineEn,
         platforms: { apple: '', android: '', web: '', windows: '' }, // Ensure object structure matches DB expectation
         date: new Date().getFullYear().toString(),
         sort_order: -999, // Ensure it's pushed to start/end if ever queried
@@ -207,8 +228,14 @@ export default function AboutPage() {
       const result = await supabase.from('projects').insert([payload]);
 
       if (result.error) {
-        console.error('Supabase error:', result.error);
-        alert("Fehler beim Speichern: " + result.error.message);
+        const errorDetails = {
+          code: result.error.code,
+          message: result.error.message,
+          details: result.error.details,
+          hint: result.error.hint,
+        };
+        console.error('Supabase error:', errorDetails);
+        alert("Fehler beim Speichern: " + (result.error.message || 'Unbekannter Supabase-Fehler'));
       } else {
         setIsEditMode(false);
         fetchContent();
@@ -251,7 +278,7 @@ export default function AboutPage() {
     }
   };
 
-  if (loading && !content.headline) return <div className="h-screen flex items-center justify-center">Lade...</div>;
+  if (loading && !content.headline) return <div className="h-screen flex items-center justify-center">{language === 'de' ? 'Lade...' : 'Loading...'}</div>;
 
   return (
     <main className="relative min-h-[calc(100vh-80px)] overflow-hidden flex flex-col items-center p-6 lg:p-12">
@@ -325,16 +352,21 @@ export default function AboutPage() {
         {/* Headline */}
         <div className="text-center mb-8">
             {isEditMode ? (
-                <input 
-                    type="text" 
-                    value={content.headline}
-                    onChange={(e) => setContent(prev => ({ ...prev, headline: e.target.value }))}
-                    className="w-full bg-transparent text-4xl md:text-5xl font-bold text-center border-b border-[#7700ff]/50 focus:outline-none text-gray-900 dark:text-white pb-2"
-                    placeholder="Überschrift"
-                />
+            <div className="space-y-3">
+              <div className="flex justify-end">
+                <LanguageSwitch value={headlineLanguage} onChange={setHeadlineLanguage} />
+              </div>
+              <input
+                type="text"
+                value={headlineLanguage === 'en' ? content.headlineEn : content.headline}
+                onChange={(e) => setContent(prev => ({ ...prev, [headlineLanguage === 'en' ? 'headlineEn' : 'headline']: e.target.value }))}
+                className="w-full bg-transparent text-4xl md:text-5xl font-bold text-center border-b border-[#7700ff]/50 focus:outline-none text-gray-900 dark:text-white pb-2"
+                placeholder={headlineLanguage === 'en' ? 'English headline' : 'Überschrift'}
+              />
+            </div>
             ) : (
                 <h1 className="text-4xl md:text-5xl font-bold text-gray-900 dark:text-white mb-2">
-                    {content.headline}
+              {visibleHeadline}
                 </h1>
             )}
         </div>
@@ -342,15 +374,20 @@ export default function AboutPage() {
         {/* Text Body */}
         <div className="prose prose-lg dark:prose-invert max-w-none">
             {isEditMode ? (
-                <textarea 
-                    value={content.text}
-                    onChange={(e) => setContent(prev => ({ ...prev, text: e.target.value }))}
-                    className="w-full h-96 bg-black/5 dark:bg-black/20 rounded-xl p-6 resize-none focus:outline-none focus:ring-2 focus:ring-[#7700ff] text-base leading-relaxed"
-                    placeholder="Schreibe etwas über dich..."
-                />
+            <div className="space-y-3">
+              <div className="flex justify-end">
+                <LanguageSwitch value={textLanguage} onChange={setTextLanguage} />
+              </div>
+              <textarea
+                value={textLanguage === 'en' ? content.textEn : content.text}
+                onChange={(e) => setContent(prev => ({ ...prev, [textLanguage === 'en' ? 'textEn' : 'text']: e.target.value }))}
+                className="w-full h-96 bg-black/5 dark:bg-black/20 rounded-xl p-6 resize-none focus:outline-none focus:ring-2 focus:ring-[#7700ff] text-base leading-relaxed"
+                placeholder={textLanguage === 'en' ? 'Write about yourself...' : 'Schreibe etwas über dich...'}
+              />
+            </div>
             ) : (
                 <p className="whitespace-pre-wrap leading-relaxed text-gray-700 dark:text-gray-300">
-                    {content.text}
+              {visibleText}
                 </p>
             )}
         </div>
@@ -398,7 +435,9 @@ export default function AboutPage() {
                             onClick={() => setPreviewContent(previewContent?.id === v.id ? null : {
                               id: v.id,
                               headline: v.technologies?.[0] || 'Über mich',
+                              headlineEn: v.headline_en || '',
                               text: v.description || '',
+                              textEn: v.text_en || '',
                               imageUrl: v.images?.[0] || ''
                             })}
                             className="px-3 py-1.5 text-sm bg-gray-200 dark:bg-white/10 hover:bg-gray-300 dark:hover:bg-white/20 rounded-lg transition-colors"

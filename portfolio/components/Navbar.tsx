@@ -1,18 +1,20 @@
 'use client';
 
 import { useTheme } from 'next-themes';
-import { Moon, Sun, LogIn, LogOut, ShieldCheck } from 'lucide-react';
+import { Moon, Sun, LogIn, LogOut, Languages } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { supabase } from '../utils/supabase';
 import { User } from '@supabase/supabase-js'; // <-- 1. Wir importieren den korrekten Supabase-User-Typ
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useLanguage } from './LanguageProvider';
 
 export default function Navbar() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const pathname = usePathname();
+  const { language, setLanguage } = useLanguage();
   
   // 2. Wir nutzen den Typ 'User | null' anstelle von 'any'
   const [user, setUser] = useState<User | null>(null);
@@ -53,15 +55,15 @@ export default function Navbar() {
         <div className="flex gap-6 text-sm font-medium">
           <Link 
             href="/" 
-            className={`transition-colors hover:text-[#7700ff] ${pathname === '/' ? 'text-[#7700ff]' : 'text-gray-600 dark:text-gray-300'}`}
+            className={`border-b-2 pb-1 transition-colors hover:text-[#7700ff] ${pathname === '/' ? 'border-[#7700ff] text-[#7700ff]' : 'border-transparent text-gray-600 dark:text-gray-300'}`}
           >
             Portfolio
           </Link>
           <Link 
             href="/about" 
-            className={`transition-colors hover:text-[#7700ff] ${pathname === '/about' ? 'text-[#7700ff]' : 'text-gray-600 dark:text-gray-300'}`}
+            className={`border-b-2 pb-1 transition-colors hover:text-[#7700ff] ${pathname === '/about' ? 'border-[#7700ff] text-[#7700ff]' : 'border-transparent text-gray-600 dark:text-gray-300'}`}
           >
-            About
+            {language === 'de' ? 'Über mich' : 'About'}
           </Link>
         </div>
 
@@ -84,6 +86,18 @@ export default function Navbar() {
                 Admin Login
               </button>
             )
+          )}
+
+          {mounted && (
+            <button
+              onClick={() => setLanguage(language === 'de' ? 'en' : 'de')}
+              className="flex items-center gap-1.5 rounded-full bg-white/50 px-3 py-2 text-xs font-semibold uppercase text-gray-800 shadow-sm backdrop-blur-md transition-all hover:bg-white hover:scale-105 dark:bg-white/10 dark:text-gray-200 dark:hover:bg-white/20"
+              aria-label={language === 'de' ? 'Auf Englisch wechseln' : 'Auf Deutsch wechseln'}
+              title={language === 'de' ? 'English' : 'Deutsch'}
+            >
+              <Languages size={16} />
+              {language === 'de' ? 'EN' : 'DE'}
+            </button>
           )}
 
           {mounted && (
