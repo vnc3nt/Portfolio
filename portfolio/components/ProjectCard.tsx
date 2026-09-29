@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, Reorder } from 'framer-motion';
 import Cropper, { type Area } from 'react-easy-crop';
 import { Github, X, ImagePlus, Loader2, Trash2, History, ChevronLeft, ChevronRight, Globe, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import PlatformBadge from './PlatformBadge';
 import type { GitHubContributor } from '../utils/github';
-import { AndroidIcon, AppleIcon, WindowsIcon } from './CustomIcons';
+import { AppStoreIcon, PlayStoreIcon, WindowsIcon } from './CustomIcons';
 import { LanguageSwitch, useLanguage, type Language } from './LanguageProvider';
 import { localizedText } from '../utils/portfolioLogic';
 
@@ -47,11 +48,13 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
   const [editedProject, setEditedProject] = useState<Project>(project);
   const [newTech, setNewTech] = useState('');
   const [cropSource, setCropSource] = useState<string | null>(null);
+  const [cropImage, setCropImage] = useState<HTMLImageElement | null>(null);
   const [cropMode, setCropMode] = useState<'landscape' | 'portrait'>('landscape');
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
   const [isCropSaving, setIsCropSaving] = useState(false);
+  const [isImagePreparing, setIsImagePreparing] = useState(false);
   
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyVersions, setHistoryVersions] = useState<Project[]>([]);
@@ -191,68 +194,118 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
     handleChange('images', updatedImages);
   };
 
-  const selectImageForCrop = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const selectImageForCrop = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
 
-    const objectUrl = URL.createObjectURL(file);
-    setCropSource(objectUrl);
-    setCropMode('landscape');
-    setCrop({ x: 0, y: 0 });
-    setZoom(1);
-    setCroppedAreaPixels(null);
+    try {
+      setIsImagePreparing(true);
+      let imageBlob: Blob = file;
+      const isHeic = /image\/hei[cf]/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
+
+      if (isHeic) {
+        const { default: convert } = await import('heic2any');
+        const converted = await convert({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+        imageBlob = Array.isArray(converted) ? converted[0] : converted;
+      }
+
+      const imageDataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === 'string') resolve(reader.result);
+          else reject(new Error('Das Bild konnte nicht gelesen werden.'));
+        };
+        reader.onerror = () => reject(new Error('Das Bild konnte nicht gelesen werden.'));
+        reader.readAsDataURL(imageBlob);
+      });
+      const decodedImage = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('Das Bild konnte nicht dekodiert werden.'));
+        image.src = imageDataUrl;
+        if (image.complete) {
+          if (image.naturalWidth > 0) resolve(image);
+          else reject(new Error('Das Bild konnte nicht dekodiert werden.'));
+        }
+      });
+
+      if (cropSource?.startsWith('blob:')) URL.revokeObjectURL(cropSource);
+  setCropImage(decodedImage);
+      setCropSource(imageDataUrl);
+      setCropMode('landscape');
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+      setCroppedAreaPixels(null);
+    } catch (error) {
+      alert('Das Bildformat konnte nicht verarbeitet werden: ' + error);
+    } finally {
+      setIsImagePreparing(false);
+    }
   };
 
   const closeCropper = () => {
-    if (cropSource) URL.revokeObjectURL(cropSource);
+    if (cropSource?.startsWith('blob:')) URL.revokeObjectURL(cropSource);
+    setCropImage(null);
     setCropSource(null);
     setCroppedAreaPixels(null);
   };
 
   const uploadCroppedImage = async () => {
-    if (!cropSource || !croppedAreaPixels) return;
+    if (!cropImage || !croppedAreaPixels) return;
 
     try {
       setIsCropSaving(true);
-      const image = new Image();
-      image.src = cropSource;
-      await new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
-        image.onerror = () => reject(new Error('Das Bild konnte nicht gelesen werden.'));
-      });
 
+      const maxDimension = 2400;
+      const resizeFactor = Math.min(
+        1,
+        maxDimension / croppedAreaPixels.width,
+        maxDimension / croppedAreaPixels.height
+      );
+      const outputWidth = Math.max(1, Math.round(croppedAreaPixels.width * resizeFactor));
+      const outputHeight = Math.max(1, Math.round(croppedAreaPixels.height * resizeFactor));
       const canvas = document.createElement('canvas');
-      canvas.width = croppedAreaPixels.width;
-      canvas.height = croppedAreaPixels.height;
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas ist nicht verfügbar.');
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
 
       context.drawImage(
-        image,
+        cropImage,
         croppedAreaPixels.x,
         croppedAreaPixels.y,
         croppedAreaPixels.width,
         croppedAreaPixels.height,
         0,
         0,
-        croppedAreaPixels.width,
-        croppedAreaPixels.height
+        outputWidth,
+        outputHeight
       );
 
       const croppedBlob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error('Das zugeschnittene Bild konnte nicht erstellt werden.'));
-        }, 'image/jpeg', 0.92);
+        canvas.toBlob((webpBlob) => {
+          if (webpBlob?.type === 'image/webp') {
+            resolve(webpBlob);
+            return;
+          }
+
+          canvas.toBlob((jpegBlob) => {
+            if (jpegBlob) resolve(jpegBlob);
+            else reject(new Error('Das zugeschnittene Bild konnte nicht erstellt werden.'));
+          }, 'image/jpeg', 0.92);
+        }, 'image/webp', 0.9);
       });
 
-      const fileName = `${Math.random().toString(36).substring(2)}.jpg`;
+      const fileExtension = croppedBlob.type === 'image/webp' ? 'webp' : 'jpg';
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExtension}`;
       const filePath = `${project.id}/${fileName}`; 
 
       const { error: uploadError } = await supabase.storage
         .from('portfolio-images')
-        .upload(filePath, croppedBlob, { contentType: 'image/jpeg' });
+        .upload(filePath, croppedBlob, { contentType: croppedBlob.type });
 
       if (uploadError) throw uploadError;
 
@@ -368,9 +421,9 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               </Reorder.Item>
             ))}
             
-            <label className="shrink-0 w-16 h-16 rounded-lg border-2 border-dashed border-[#7700ff]/50 flex items-center justify-center cursor-pointer hover:bg-[#7700ff]/10 hover:border-[#7700ff] transition-colors">
-              {isCropSaving ? <Loader2 size={16} className="animate-spin text-[#7700ff]" /> : <ImagePlus size={16} className="text-[#7700ff]" />}
-                <input type="file" accept="image/*" className="hidden" onChange={selectImageForCrop} disabled={isCropSaving} />
+            <label className={`shrink-0 w-16 h-16 rounded-lg border-2 border-dashed border-[#7700ff]/50 flex items-center justify-center transition-colors ${isCropSaving || isImagePreparing ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[#7700ff]/10 hover:border-[#7700ff]'}`}>
+              {isCropSaving || isImagePreparing ? <Loader2 size={16} className="animate-spin text-[#7700ff]" /> : <ImagePlus size={16} className="text-[#7700ff]" />}
+                <input type="file" accept="image/*,.heic,.heif" className="hidden" onChange={selectImageForCrop} disabled={isCropSaving || isImagePreparing} />
             </label>
           </Reorder.Group>
         </div>
@@ -394,19 +447,24 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 src={editedProject.images?.[currentImageIndex] || fallbackImage}
                 alt={editedProject.title}
                 onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
-                className={imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? 'hidden' : 'absolute inset-3 h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] object-contain rounded-lg shadow-lg ring-1 ring-black/10 dark:ring-white/10'}
+                className={imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? 'hidden' : 'absolute inset-0 h-full w-full object-cover'}
               />
               {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' && (
                 <div
-                  className="absolute left-1/2 top-1/2 w-auto max-w-[42%] -translate-x-1/2 -translate-y-1/2 rounded-[1.35rem] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
-                  style={{ height: 'min(90%, calc(100% - 1.5rem))', aspectRatio: '9 / 19.5' }}
+                  className="absolute inset-y-2 left-1/2 h-[calc(100%-1rem)] -translate-x-1/2 border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                  style={{
+                    aspectRatio: '9 / 19.5',
+                    borderRadius: '22.5% / 10.4%',
+                  }}
                 >
-                  <div className="relative h-full w-full overflow-hidden rounded-[1.1rem] bg-black">
-                    <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
+                  <div
+                    className="relative h-full w-full overflow-hidden bg-black"
+                    style={{ borderRadius: '18.5% / 8.5%' }}
+                  >
                     <img
                       src={editedProject.images?.[currentImageIndex] || fallbackImage}
                       alt={editedProject.title}
-                      className="h-full w-full object-contain"
+                      className="h-full w-full object-cover"
                     />
                   </div>
                 </div>
@@ -606,7 +664,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 />
              </div>
              <div className="flex items-center gap-3 bg-black/5 dark:bg-white/5 p-2 rounded text-xs">
-                <AppleIcon size={16} className="text-black dark:text-white shrink-0" />
+                <AppStoreIcon size={16} className="shrink-0" />
                 <input 
                   placeholder="App Store URL" 
                   value={editedProject.platforms.apple || ''} 
@@ -615,7 +673,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 />
              </div>
              <div className="flex items-center gap-3 bg-black/5 dark:bg-white/5 p-2 rounded text-xs">
-                <AndroidIcon size={16} className="text-[#3DDC84] shrink-0" />
+                <PlayStoreIcon size={16} className="shrink-0" />
                 <input 
                   placeholder="Play Store URL" 
                   value={editedProject.platforms.android || ''} 
@@ -643,14 +701,14 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               isEditMode={isEditMode}
             />
             <PlatformBadge 
-              icon={AppleIcon} 
+              icon={AppStoreIcon} 
               label="App Store" 
               url={editedProject.platforms.apple} 
               colorClass="bg-black dark:bg-black/40" 
               isEditMode={isEditMode}
             />
             <PlatformBadge 
-              icon={AndroidIcon} 
+              icon={PlayStoreIcon}
               label="Play Store" 
               url={editedProject.platforms.android} 
               colorClass="bg-[#26C96C] text-black" 
@@ -752,24 +810,24 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
       )}
 
       {/* Image Cropper */}
-      {cropSource && (
+      {cropSource && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[130] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm dark:bg-black/75"
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-white/15 bg-slate-950 text-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 p-4">
+          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-white/15 dark:bg-slate-950 dark:text-white">
+            <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-white/10">
               <div>
                 <h2 className="font-semibold">Bildformat wählen</h2>
-                <p className="mt-1 text-xs text-slate-400">Ziehe das Bild und passe den Zoom an.</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Ziehe das Bild und passe den Zoom an.</p>
               </div>
-              <button type="button" onClick={closeCropper} className="rounded-full p-2 text-slate-400 transition-colors hover:bg-white/10 hover:text-white" title="Schließen">
+              <button type="button" onClick={closeCropper} className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-white" title="Schließen">
                 <X size={18} />
               </button>
             </div>
 
-            <div className="flex gap-2 border-b border-white/10 p-4">
+            <div className="flex gap-2 border-b border-slate-200 p-4 dark:border-white/10">
               <button
                 type="button"
                 aria-pressed={cropMode === 'landscape'}
@@ -778,7 +836,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                   setCrop({ x: 0, y: 0 });
                   setZoom(1);
                 }}
-                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'landscape' ? 'border-[#7700ff] bg-[#7700ff]/15 text-white' : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'landscape' ? 'border-[#7700ff] bg-[#7700ff]/15 text-slate-900 dark:text-white' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10'}`}
               >
                 <span className="block font-medium">Querformat</span>
                 <span className="text-xs opacity-70">16:9, füllt den Vorschauerahmen</span>
@@ -791,7 +849,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                   setCrop({ x: 0, y: 0 });
                   setZoom(1);
                 }}
-                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'portrait' ? 'border-[#7700ff] bg-[#7700ff]/15 text-white' : 'border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${cropMode === 'portrait' ? 'border-[#7700ff] bg-[#7700ff]/15 text-slate-900 dark:text-white' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 dark:border-white/10 dark:bg-white/5 dark:text-slate-400 dark:hover:bg-white/10'}`}
               >
                 <span className="block font-medium">Smartphone</span>
                 <span className="text-xs opacity-70">9:19.5, für den iPhone-Rahmen</span>
@@ -811,8 +869,8 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               />
             </div>
 
-            <div className="flex items-center gap-3 border-t border-white/10 p-4">
-              <span className="text-xs text-slate-400">Zoom</span>
+            <div className="flex items-center gap-3 border-t border-slate-200 p-4 dark:border-white/10">
+              <span className="text-xs text-slate-500 dark:text-slate-400">Zoom</span>
               <input
                 type="range"
                 min={1}
@@ -823,7 +881,7 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 className="min-w-0 flex-1 accent-[#7700ff]"
                 aria-label="Bildzoom"
               />
-              <button type="button" onClick={closeCropper} className="rounded-lg px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10">
+              <button type="button" onClick={closeCropper} className="rounded-lg px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10">
                 Abbrechen
               </button>
               <button
@@ -837,13 +895,14 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Image Lightbox */}
-      {isImageLightboxOpen && (
+      {isImageLightboxOpen && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[110] flex items-center justify-center bg-white/95 p-4 backdrop-blur-md dark:bg-black/90"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-white/95 backdrop-blur-md dark:bg-black/90"
           onClick={() => setIsImageLightboxOpen(false)}
         >
           <button
@@ -858,22 +917,23 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
           </button>
 
           <div
-            className="relative flex h-[90vh] max-h-[calc(100vh-2rem)] w-full max-w-7xl items-center justify-center overflow-hidden"
+            className="relative flex h-full max-h-full w-full max-w-7xl items-center justify-center overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {imageOrientations[editedProject.images?.[currentImageIndex] || fallbackImage] === 'portrait' ? (
-                <div
-                  className="relative z-10 w-auto max-w-[calc(100vw-2rem)] border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
-                  style={{ height: 'min(90%, calc(100dvh - 6rem))', aspectRatio: '9 / 19.5' }}
-                style={{ borderRadius: '22.5% / 10.4%' }}
+                  <div
+                        className="relative z-10 h-[calc(100%-1rem)] max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] w-auto shrink-0 border-2 border-black bg-black p-0.5 shadow-[0_4px_18px_5px_rgba(0,0,0,0.28)] dark:shadow-[0_4px_18px_5px_rgba(161,161,170,0.3)]"
+                  style={{
+                        aspectRatio: '9 / 19.5',
+                        borderRadius: '22.5% / 10.4%',
+                    }}
               >
                 <div className="relative h-full w-full overflow-hidden bg-black" style={{ borderRadius: '18.5% / 8.5%' }}>
-                  <div className="absolute left-1/2 top-1 z-10 h-3.5 w-10 -translate-x-1/2 rounded-full bg-black shadow-sm" />
                   <img
                     src={editedProject.images?.[currentImageIndex] || fallbackImage}
                     alt={editedProject.title}
                     onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
-                    className="h-full w-full object-contain"
+                    className="h-full w-full object-cover"
                   />
                 </div>
               </div>
@@ -882,11 +942,9 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
                 src={editedProject.images?.[currentImageIndex] || fallbackImage}
                 alt={editedProject.title}
                 onLoad={(event) => handleImageLoad(event, editedProject.images?.[currentImageIndex] || fallbackImage)}
-                className="relative z-10 max-h-[90%] max-w-full object-contain rounded-2xl shadow-2xl ring-1 ring-black/10 dark:ring-white/20"
+                className="relative z-10 max-h-[calc(100%-1rem)] max-w-[calc(100%-1rem)] object-contain rounded-2xl shadow-2xl"
               />
             )}
-
-            <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-white/10" />
 
             {(editedProject.images?.length || 0) > 1 && (
               <>
@@ -918,7 +976,8 @@ export default function ProjectCard({ project, isEditMode = false, onUpdate, onD
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </motion.div>
   );
